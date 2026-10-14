@@ -1,0 +1,34 @@
+name: CPU tests and packaging
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[test]"
+      - run: python -m pytest tests/ -q
+      - run: pip install build
+      - run: python -m build
+      - name: Verify wheel imports outside the checkout
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/torchyand-wheel"
+          wheel_python="$RUNNER_TEMP/torchyand-wheel/bin/python"
+          "$wheel_python" -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          "$wheel_python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$wheel_python" -I -c "from pathlib import Path; import sys, torchyand; from torchyand import MVSKData, prepare_mvsk_data, MVSKOracle; from torchyand.solver import solve_yand, YANDOptions, YANDMVSK, YANDResult, SolverStatus; assert Path(torchyand.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()); print(torchyand.__file__)"

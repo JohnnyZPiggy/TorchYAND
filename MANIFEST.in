@@ -1,0 +1,2 @@
+include TorchYAND_MVSK_Design_Spec.md
+include tests/mvsk_reference.py

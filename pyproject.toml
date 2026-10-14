@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torchyand"
+version = "0.1.0"
+description = "PyTorch implementation of YAND-MVSK higher-moment portfolio optimization"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+# TODO: validate the declared PyTorch minimum before claiming compatibility.
+dependencies = ["torch>=2.0"]
+
+[project.urls]
+Repository = "https://github.com/JohnnyZPiggy/TorchYAND"
+
+[project.optional-dependencies]
+test = ["pytest>=7", "numpy"]
+
+[tool.setuptools.packages.find]
+include = ["torchyand*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
