@@ -200,5 +200,13 @@ gave expected success/timeout/crash cleanup and expected stop/verify/veto failur
 No real session was involved in either failure or correction. Local filesystem
 availability remains a limitation, not a reason to weaken the live-use block.
 
+Full regression on intermediate commit d38b493 exposed a result-publication
+race: cleanup wrote status first, then watchdog added trigger in a second
+write, so the parent-termination observer could read an incomplete record.
+Actual result was `1 failed, 1268 passed, 43 skipped, 1 warning in 71.46s`,
+exit 1. The watchdog now supplies trigger before a single atomic publication;
+a focused test asserts exactly one complete result write. This failure is not
+being counted as a PASS; final post-fix evidence is recorded separately below.
+
 Next action: Architect reviews exact head, read-only evidence and mock safety
 coverage. Parent #7 remains open and blocked; no TPU readiness inferred.

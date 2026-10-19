@@ -143,3 +143,20 @@ def test_budget_and_deadline_validation(tmp_path):
 def test_synced_checkout_state_is_rejected():
     with pytest.raises(ValueError, match='temporary storage'):
         g.prepare(SOURCE.parents[1]/'forbidden-mock-state', 'success', 3)
+
+
+def test_watchdog_publishes_complete_result_once(tmp_path, monkeypatch):
+    directory = tmp_path/'publication'
+    state = g.prepare(directory, 'success', 3)
+    (directory/'done').touch()
+    write = g.write_json
+    published = []
+    def capture(path, value):
+        if path.name == 'result.json':
+            published.append(dict(value))
+        write(path, value)
+    monkeypatch.setattr(g, 'write_json', capture)
+    assert g.watchdog(directory, state['owner'], state['session'], state['deadline'], 1.2, __import__('os').getpid()) == 0
+    assert len(published) == 1
+    assert published[0]['trigger'] == 'WORKER_FINISHED'
+    assert published[0]['status'] == 'MOCK_RELEASE_VERIFIED'

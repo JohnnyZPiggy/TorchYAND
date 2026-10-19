@@ -87,12 +87,12 @@ class FakeCLI:
                            text=True, timeout=timeout)
 
 
-def cleanup(directory, state, owner, session, deadline, cli):
+def cleanup(directory, state, owner, session, deadline, cli, trigger=None):
     """One stop + one verify, never reallocate; idempotent terminal result."""
     result_path = directory/'result.json'
     result = dict(mock_only=True, status='CLEANUP_FAILED', attention='MANUAL_ATTENTION_REQUIRED',
                   owner=owner, session=session, real_session_stop='NOT RUN',
-                  session_count='UNKNOWN', owned_released=False)
+                  session_count='UNKNOWN', owned_released=False, trigger=trigger)
     try:
         validate_state(state, owner, session, deadline)
         if result_path.exists():
@@ -146,9 +146,7 @@ def watchdog(directory, owner, session, deadline, buffer, parent_pid, executable
         state = json.loads((directory/'ownership.json').read_text())
     except (OSError, ValueError):
         state = {}
-    result = cleanup(directory, state, owner, session, deadline, FakeCLI(directory, executable))
-    result['trigger'] = reason
-    write_json(directory/'result.json', result)
+    result = cleanup(directory, state, owner, session, deadline, FakeCLI(directory, executable), trigger=reason)
     return 0 if result['owned_released'] else 1
 
 
