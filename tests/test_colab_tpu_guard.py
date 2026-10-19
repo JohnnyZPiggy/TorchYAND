@@ -138,3 +138,8 @@ def test_budget_and_deadline_validation(tmp_path):
     result = g.cleanup(tmp_path/'budget', state, state['owner'], state['session'], state['deadline'], g.FakeCLI(tmp_path/'budget'))
     assert result['status'] == 'CLEANUP_FAILED'
     assert not (tmp_path/'budget/mock-commands.jsonl').exists()
+
+
+def test_synced_checkout_state_is_rejected():
+    with pytest.raises(ValueError, match='temporary storage'):
+        g.prepare(SOURCE.parents[1]/'forbidden-mock-state', 'success', 3)

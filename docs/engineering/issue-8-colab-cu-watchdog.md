@@ -122,6 +122,10 @@ cancel signal and parent liveness. It does not rely on the benchmark process's
 finally block. Windows parent liveness uses a query-only process handle;
 POSIX uses signal 0. No process is killed by a raw PID from state metadata.
 The controller kills only its own Popen child handle when required.
+State directories are required to be under the local OS temporary directory;
+the synced project checkout is rejected. This avoids putting ownership metadata
+in Dropbox and reduces synced-file sharing interference. This is not proof of
+private Windows ACLs or immunity to local antivirus/filesystem locks.
 
 Simulations use a 2.5-second total budget, including startup and cleanup, with
 1.2 seconds reserved for cleanup. Every fake CLI call has a timeout at most
@@ -168,12 +172,13 @@ No installation required for the stdlib tool. pytest is needed for tests only:
 
 ```text
 python tools/colab_tpu_guard.py --dry-run
-python tools/colab_tpu_guard.py --dry-run --scenario timeout --output-dir benchmarks/results/issue8-timeout
+python tools/colab_tpu_guard.py --dry-run --scenario timeout --output-dir <OS_TEMP>/torchyand-issue8-timeout
 python -m pytest tests/test_colab_tpu_guard.py -q
 python -m pytest tests/ -q
 ```
 
-Output directory must be new. Only local files/processes are created. Internal
+Replace <OS_TEMP> with the local OS temporary directory (PowerShell: $env:TEMP;
+Linux: Python tempfile.gettempdir()). Output directory must be new. Only local files/processes are created. Internal
 _fake/_watch/_worker entries are local simulator plumbing, not live operations.
 KeyboardInterrupt is injected locally in the cancellation test; parent death
 test actually terminates a separate local controller and observes independent
@@ -183,6 +188,17 @@ These are MOCK_ONLY, not CLEANUP_VALIDATED.
 Initial scoped validation: `18 passed in 8.00s`, exit 0, local Windows Python
 3.14.6. Committed-source evidence and final matrix will be appended after the
 bounded final validation. No TPU/XLA device test has been run.
+
+During supplementary fault-log capture, one timeout simulation under the Dropbox
+checkout returned CLEANUP_FAILED (not a false success). A subsequent diagnostic
+repeat reproduced Windows PermissionError / WinError 5 on atomic result-file
+replacement in that synced directory; the exact cause of the first stop subprocess
+nonzero was not retained. Both failures are retained in local ignored evidence.
+State storage is now restricted to local OS temporary storage and mock failures
+preserve diagnostic details. Re-running the seven demonstration scenarios there
+gave expected success/timeout/crash cleanup and expected stop/verify/veto failures.
+No real session was involved in either failure or correction. Local filesystem
+availability remains a limitation, not a reason to weaken the live-use block.
 
 Next action: Architect reviews exact head, read-only evidence and mock safety
 coverage. Parent #7 remains open and blocked; no TPU readiness inferred.

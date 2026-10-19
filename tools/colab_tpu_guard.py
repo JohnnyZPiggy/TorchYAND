@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 
@@ -105,7 +106,7 @@ def cleanup(directory, state, owner, session, deadline, cli):
                 raise TimeoutError('Cleanup deadline exhausted')
             reply = cli.call('stop' if stage == 'stop' else 'sessions', session, owner, min(.35, remaining))
             if reply.returncode != 0:
-                raise RuntimeError(f'{stage} nonzero')
+                raise RuntimeError(f'{stage} nonzero ({reply.returncode}); MOCK stderr: {reply.stderr[-1500:]}')
             if stage != 'stop':
                 rows = json.loads(reply.stdout)
                 if not isinstance(rows, list) or any(not isinstance(r, dict) or not isinstance(r.get('name'), str)
@@ -123,6 +124,7 @@ def cleanup(directory, state, owner, session, deadline, cli):
             result.update(status='MOCK_RELEASE_VERIFIED', attention='NONE', owned_released=True)
     except (OSError, ValueError, TypeError, RuntimeError, TimeoutError, subprocess.TimeoutExpired) as error:
         result['error'] = type(error).__name__
+        result['detail'] = str(error)
     write_json(result_path, result)
     return result
 
@@ -153,6 +155,8 @@ def watchdog(directory, owner, session, deadline, buffer, parent_pid, executable
 def prepare(directory, scenario, seconds):
     if scenario not in SCENARIOS or not math.isfinite(seconds) or not 1.5 <= seconds <= 5:
         raise ValueError('Known mock scenario and deadline 1.5..5 seconds required')
+    if not directory.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
+        raise ValueError('Mock state must be inside local OS temporary storage, outside the synced checkout')
     directory.mkdir(parents=True, exist_ok=False)
     directory.chmod(0o700)
     owner, session_id = uuid.uuid4().hex, uuid.uuid4().hex
