@@ -210,3 +210,72 @@ being counted as a PASS; final post-fix evidence is recorded separately below.
 
 Next action: Architect reviews exact head, read-only evidence and mock safety
 coverage. Parent #7 remains open and blocked; no TPU readiness inferred.
+
+## Final committed-source evidence
+
+Tested implementation SHA: `08915aa93c6a74f516f552b7c22f855fd2fe647f`,
+clean working tree before the runs. Later evidence-only changes modify this
+report, not tool/test code. Windows 11, Python 3.14.6 (Anaconda), pytest 9.0.3;
+full suite uses existing torch 2.14.1+cpu. Interpreter was
+`D:\software\anaconda3\python.exe`; OMP_NUM_THREADS=1, MKL_NUM_THREADS=1.
+Stdlib watchdog requires no installation or torch import. No new dependencies.
+
+Genuine final terminal excerpts, all on the tested implementation above:
+
+```text
+python -m pytest tests/test_colab_tpu_guard.py -q
+20 passed in 9.80s
+Exit code: 0
+
+python -m pytest tests/ -q
+1270 passed, 43 skipped, 1 warning in 75.15s (0:01:15)
+Exit code: 0
+```
+
+The warning is the existing TorchScript/Python 3.14 FutureWarning; the skips do
+not establish TPU coverage. `git diff --check` passed. Source baseline rechecked;
+production torchyand/, benchmarks/, pyproject.toml and .github/ remain unchanged.
+Raw test captures are local ignored files in
+`benchmarks/results/issue8-08915aa-evidence/`. This directory contains no raw
+account usage response. Sanitized/mock `faults.json` SHA-256:
+`5addb16d66267b8068d08c364ef5f662c6a673dfd846e8f03619ab444f7d7d7e`.
+
+Final genuine mock fault-log summary (not real Colab evidence):
+
+| Scenario | Observed result | Mock stop calls |
+| --- | --- | --- |
+| success | MOCK_RELEASE_VERIFIED, worker exit 0 | 1 |
+| timeout / hung local worker | MOCK_RELEASE_VERIFIED, trigger DEADLINE | 1 |
+| worker crash | MOCK_RELEASE_VERIFIED, worker exit 1 | 1 |
+| stop nonzero | CLEANUP_FAILED / MANUAL_ATTENTION_REQUIRED | 1 |
+| owned session still listed | CLEANUP_FAILED / MANUAL_ATTENTION_REQUIRED | 1 |
+| preflight veto | BLOCKED, no watchdog/worker started | 0 |
+| missing numeric budget | BLOCKED, no watchdog/worker started | 0 |
+
+Additional passing unit/integration tests cover injected cancellation and
+KeyboardInterrupt, actual local parent process termination, hung fake stop,
+missing/stale/foreign metadata, ownership mismatch, missing budget metadata,
+bounded command argv, executable identity, idempotency, live veto, temporary
+storage restriction and one-shot result publication. Fake stop/list calls only
+use the local Python stub; zero real Colab stop/exec/allocation commands were
+invoked by the test/tool. Existing unrelated mock server rows were preserved.
+Failures in deliberately failing scenarios count as correct fail-closed behavior,
+not successful cleanup. CLEANUP_VALIDATED(real)=NOT RUN.
+
+| Required final status | Evidence-based value |
+| --- | --- |
+| CLI_USAGE_COMMAND | VERIFIED |
+| ACCOUNT_BALANCE_FIELD | AVAILABLE |
+| CURRENT_AGGREGATE_RATE | AVAILABLE (value private; not a TPU quote) |
+| TPU_V5E1_PROSPECTIVE_RATE | UNKNOWN |
+| CU_CAP_ENFORCEABILITY | BLOCKED |
+| WATCHDOG_MOCK | PASS |
+| REAL_SESSION_STOP | NOT RUN |
+| TPU_ALLOCATED | NO |
+| XLA_COMPILE | NOT RUN |
+| HARD_STOP_GUARANTEE | NOT_PROVEN |
+
+No live resource authorization is being requested or inferred from this offline
+delivery. Architect review is pending; Codex does not self-merge. Parent #7
+stays open and blocked for actual allocation, pending the separate scientific,
+compatibility, safety and numeric-resource decisions.
