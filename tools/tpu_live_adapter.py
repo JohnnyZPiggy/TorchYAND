@@ -268,6 +268,8 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
                 raise RuntimeError('WATCHDOG_NOT_READY')
             time.sleep(.02)
         data['phase'] = 'NAMED_ALLOCATION_PENDING'; save(directory, data)
+        if guardian.poll() is not None:
+            raise RuntimeError('WATCHDOG_DIED_BEFORE_ALLOCATION')
         outcome = 'ALLOCATION_UNCERTAIN'
         cli.call('allocate')
         row = discover(data, sessions(cli.call('sessions')))
@@ -275,6 +277,8 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
         outcome = 'DEVICE_OR_PROBE_BLOCKED'
         if row['hardware'] != 'V5E1' or row['variant'] != 'TPU':
             raise ValueError('WRONG_ALLOCATED_HARDWARE')
+        if guardian.poll() is not None:
+            raise RuntimeError('WATCHDOG_DIED_BEFORE_PROBE')
         output = cli.call('probe')
         markers = [line.removeprefix('TORCHYAND_TPU_PROBE:') for line in output.splitlines()
                    if line.startswith('TORCHYAND_TPU_PROBE:')]
@@ -303,7 +307,7 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
                 cleanup = release(directory, cli, 'WATCHDOG_UNAVAILABLE')
                 outcome, error_kind = 'WATCHDOG_FAILED', 'IndependentCleanupUnavailable'
         result = dict(outcome=outcome, cleanup=cleanup, error=error_kind, source_sha=permit.source_sha,
-                      XLA_COMPILE='NOT RUN', ACTUAL_CU='NOT MEASURED', HARD_STOP_GUARANTEE='NOT_PROVEN')
+                      XLA_COMPILE='NOT BENCHMARKED', ACTUAL_CU='NOT MEASURED', HARD_STOP_GUARANTEE='NOT_PROVEN')
         guard.write_json(directory/'summary.json', result)
     return result
 
