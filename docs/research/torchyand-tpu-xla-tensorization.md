@@ -2,7 +2,7 @@
 
 > SAE Framework V3.3 research gate · **Scientific Mentor: GPT** · **Scientific reviewer: Human Scientist**  
 > Target: `JohnnyZPiggy/TorchYAND` · [Research Issue #1](https://github.com/JohnnyZPiggy/TorchYAND/issues/1)  
-> **Status: RESEARCH_BLOCKED — pending Scientist review of this draft, not mathematical infeasibility.**  
+> **Status: RESEARCH_READY — Scientist-approved kernel-first TPU/XLA research scope (2026-10-19); TPU allocation not authorized.**  
 > Prepared 2026-10-19 · Reviewed TorchYAND source commit: `4d428c0e178c4f0d32e82e8e8ba497805ed66e67`  
 > Consulted (but not installed/copied) SAE V3.3 governance source: `5d21248709d454ae7a6d3e2d657c494373a0f085`
 
@@ -128,12 +128,12 @@ As of this document:
 
 ## 7. Alternatives, risks, Scientist decision and handoff
 
-- **Research decision:** `RESEARCH_BLOCKED — SCIENTIST_REVIEW_PENDING`. This draft is technically scoped to *existing* mathematics. Approving it as `RESEARCH_READY` approves the proposed **scope and evidence gates**, **not** future TPU spending, a numerical tolerance without data, a new algorithm, or a performance claim.
+- **Research decision:** `RESEARCH_READY` — Human Scientist explicitly confirmed PR #2 on 2026-10-19; [GitHub decision record](https://github.com/JohnnyZPiggy/TorchYAND/issues/1#issuecomment-6275813704). Approval covers the **existing-mathematics, kernel-first TPU/XLA research scope and evidence gates only**; it does **not** authorize TPU resource spending, unvalidated error tolerances, mathematical changes, or performance claims.
 - **Mathematically established:** matrix-free derivative identities given the sample-moment objective, and fixed tensor recurrence code exists. Positive definiteness, TPU support and compile acceleration are **not established**.
 - **Hypotheses:** larger regular batched contractions could suit TPU; repeated fixed-shape PCG calls may amortize compilation; changing tensor masks without changing metadata could reuse XLA graphs.
 - **Open risks:** precision/indefiniteness/PCG breakdown, graph explosion at large `K`, sync and implicit XLA lazy compilation, XLA op/device unsupported cases, Colab CLI TPU allocation.
-- **Scientist review needed:** accept/reject the *initial unchanged-math TPU kernel research scope*, and separately supply TPU resource limits when ready.
+- **Scientist review:** initial unchanged-math TPU kernel research scope **APPROVED** (2026-10-19). Actual TPU allocation remains **NOT AUTHORIZED** until hardware class, concurrent sessions, time and numeric quota/CU limits are separately approved.
 - **Architect handoff:** Codex can inspect CLI / compatibility offline and prepare a minimal non-running preflight independently; any change to numerical mathematics or formal TPU benchmark must await the relevant gate(s).
 - **Next research question:** can fixed masked PCG achieve reliable correct true residual and curve checks under supported TPU matmul precision modes without recompiling across changed tensor masks?
 
-*This is a research study draft, not an accepted mathematical contract or experimental report.*
+*This is an approved research scope, not a validated TPU numerical implementation, experimental report, or authorization to allocate hardware.*
