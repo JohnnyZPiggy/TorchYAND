@@ -1,4 +1,4 @@
-# TorchYAND — TPU/XLA mathematical structure and compilation study (draft)
+# TorchYAND — TPU/XLA mathematical structure and compilation study (Scientist-approved scope)
 
 > SAE Framework V3.3 research gate · **Scientific Mentor: GPT** · **Scientific reviewer: Human Scientist**  
 > Target: `JohnnyZPiggy/TorchYAND` · [Research Issue #1](https://github.com/JohnnyZPiggy/TorchYAND/issues/1)  
