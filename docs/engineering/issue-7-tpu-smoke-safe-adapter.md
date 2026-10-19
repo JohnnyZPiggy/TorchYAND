@@ -184,3 +184,74 @@ recorded below after verification; preliminary output is not final evidence.
 Next action: Architect reviews this exact source/tested SHA and mock evidence.
 Only Architect can accept OFFLINE_ADAPTER_ACCEPTED; this report does not assert
 TPU_READY or self-approve/merge its own code.
+
+## Final committed-source evidence
+
+Tested implementation: `b7a999e06357c1a8e354a97e30fc8d2fafc8cbc2`, clean
+working tree before execution. Subsequent evidence-only commit changes this
+report, not code or tests. Windows 11 / Python 3.14.6 (Anaconda), pytest 9.0.3;
+full suite uses existing torch 2.14.1+cpu. OMP_NUM_THREADS=1 and MKL_NUM_THREADS=1
+were set. Existing Python environment was reused; stdlib tool needs no install.
+Windows-local execution PASS; Linux/WSL execution NOT RUN.
+
+Genuine terminal excerpts on that exact implementation:
+
+```text
+python -m pytest tests/test_tpu_safe_adapter.py tests/test_colab_tpu_guard.py -q
+98 passed in 45.77s
+Exit code: 0
+
+python -m pytest tests/ -q
+1348 passed, 43 skipped, 1 warning in 107.34s (0:01:47)
+Exit code: 0
+```
+
+The 98 focused cases comprise 78 new adapter cases and 20 retained guard cases.
+The existing warning concerns TorchScript on Python 3.14; skips establish no
+hardware coverage. No CPU native compilation, XLA compilation or remote runtime
+was involved. `git diff --check` passed; production torchyand/, benchmarks/,
+pyproject.toml and .github/ are unchanged against dispatch baseline. Legacy
+guard's historical 20-minute full-smoke proposal remains dry-run-only; this
+adapter's first-probe gate is at most 5 minutes, also not authorized.
+
+Eight actual **local-only** fault demonstrations ran on the tested commit:
+
+| Synthetic case | Cleanup status / outcome | Allocate / stop / probe calls (all FAKE) |
+| --- | --- | --- |
+| success | RELEASED / MOCK_PROBE_PASS | 1 / 1 / 1 |
+| allocation response lost, no provable identity | ALLOCATION_UNCERTAIN / ALLOCATION_UNCERTAIN | 1 / 0 / 0 |
+| allocation response lost, provable mock correlation | RELEASED / ALLOCATION_UNCERTAIN | 1 / 1 / 0 |
+| wrong device | RELEASED / DEVICE_VERIFY_FAILED | 1 / 1 / 0 |
+| misleading stop success text | CLEANUP_FAILED / MOCK_PROBE_PASS | 1 / 1 / 1 |
+| local name lost | CLEANUP_FAILED / MOCK_PROBE_PASS | 1 / 0 / 1 |
+| watchdog killed | RELEASED / WATCHDOG_FAILED; manual attention | 1 / 1 / 0 |
+| rate evidence missing | BLOCKED / BLOCKED | 0 / 0 / 0 |
+
+These logs contain no real endpoint/account/approval data. Raw test captures
+and sanitized synthetic fault summary remain ignored under
+`benchmarks/results/issue10-b7a999e-evidence/`. Summary faults.json SHA-256:
+`4e8cfc8e9c8970523417ef89eacb64b468cc9bb9eb864dfc989ee03cde631497`.
+Private fake journals/command logs are local temporary data, not public artifacts.
+No real Colab CLI/account/credential operation occurred this cycle.
+
+| Required status | Actual evidence |
+| --- | --- |
+| ADAPTER_STATIC_REVIEW | PASS (Engineer source/contract inspection; Architect review pending) |
+| DEVICE_ALLOWLIST_MOCK | PASS |
+| ALLOCATION_UNCERTAINTY_MOCK | PASS; real CLI correlation proof unavailable |
+| OWNED_CLEANUP_MOCK | PASS (including correct fail-closed outcomes) |
+| WATCHDOG_MOCK | PASS (including independent parent death/deadline and watchdog-failure handling) |
+| CPU_TESTS | PASS, 98 focused cases |
+| CPU_REGRESSION | PASS, 1348 passed / 43 skipped / 1 warning |
+| LIVE_ADAPTER_ENABLED | NO |
+| REAL_SESSION_STOP | NOT RUN |
+| TPU_ALLOCATED | NO |
+| XLA_COMPILE | NOT RUN |
+| PROSPECTIVE_CU_RATE | UNKNOWN |
+| CU_CAP_ENFORCEABILITY | BLOCKED |
+| HARD_STOP_GUARANTEE | NOT_PROVEN |
+
+No new human approval, off-host guarantee, real reconciliation capability or
+resource readiness is established by mock PASS. Parent #7 remains OPEN/BLOCKED.
+Next command: Architect reviews this child PR's exact head and CPU evidence,
+without enabling live execution or allocating resources.
