@@ -7,6 +7,8 @@ Refs [#5](https://github.com/JohnnyZPiggy/TorchYAND/issues/5), approved
 [offline compatibility candidate](issue-3-tpu-xla-offline.md).
 Historical pending-research text in the offline report is superseded by the
 Scientist's approval; resource allocation remains unauthorized.
+Report follows the [SAE Engineering Report](https://github.com/JohnnyZPiggy/SAE-Framework/blob/5d21248709d454ae7a6d3e2d657c494373a0f085/templates/ENGINEERING_REPORT.md).
+Status: CPU_VERIFIED / REVIEW; Architect acceptance pending.
 
 ## Build-vs-Reuse and scope
 
@@ -107,9 +109,74 @@ already installed dependencies; editable build/install exited 0. This validates
 installation in the existing environment, not a fresh dependency resolver.
 No CPU compiler or TPU runtime was invoked.
 
-Actual run evidence and final state will be appended after validation on the
-committed implementation SHA. Raw run artifacts stay in ignored directories;
-only compact genuine terminal excerpts are published in this report.
+Tested implementation SHA: `e10d5ebe343bb09f063b2376c2be9860a5cb81a5`.
+Both smoke and reuse manifests record source_dirty=false. Subsequent evidence
+updates change this document only; implementation/test bytes remain identical.
+Actual environment: Windows CPU, Python 3.14.6 (Anaconda), torch 2.14.1+cpu,
+pytest 9.0.3, numpy 2.4.6. Interpreter: `D:\software\anaconda3\python.exe`.
+OMP_NUM_THREADS=1 and MKL_NUM_THREADS=1 were set for the actual runs.
+One TorchScript FutureWarning concerns Python 3.14; no warning was suppressed.
+This does not establish compatibility across all declared torch versions.
+
+Actual commands used the interpreter above and the reproduction arguments,
+with run-specific output directories `benchmarks/results/issue5-e10d5eb-smoke`
+and `benchmarks/results/issue5-e10d5eb-reuse`. Captures are in the ignored
+`benchmarks/results/issue5-e10d5eb-evidence/` directory. Genuine stdout excerpts:
+
+```text
+python -m pip install -e ".[test]" --no-deps
+Successfully built torchyand
+Successfully installed torchyand-0.1.0
+Process exit code: 0
+
+cpu/reference: PASS; reports: benchmarks\results\issue5-e10d5eb-smoke
+Exit code: 0
+cpu/reference: PASS; reports: benchmarks\results\issue5-e10d5eb-reuse
+Exit code: 0
+
+python -m pytest tests/test_tpu_xla_harness.py -q
+24 passed, 1 warning in 5.23s
+Exit code: 0
+
+python -m pytest tests/ -q
+1250 passed, 43 skipped, 1 warning in 70.73s (0:01:10)
+Exit code: 0
+```
+
+Smoke: all five comparisons PASS, maximum absolute errors by boundary:
+value_grad 1.39e-16, hvp 2.66e-15, third_action 9.77e-15,
+projected_hessian 9.77e-15, fixed_pcg 2.22e-15. Smoke PCG iterations
+[0,8,8,8], converged [true,false,false,false], no breakdown/negative curvature,
+max_iter_reached [false,true,true,true]. True residuals approximately
+[0,6.96e-5,6.37e-4,5.01e-4]. This is correct budget reporting, not convergence
+of all systems. Reuse: 20/20 CPU states passed; this is numerical state coverage,
+not evidence of XLA graph reuse. No CPU/TPU benchmark speedup was measured.
+
+Actual local report SHA-256 identifiers (raw files remain ignored):
+
+| File | SHA-256 |
+| --- | --- |
+| smoke/manifest.json | 8b457005f63729526936a0cd0755355fe8ec4346572b201098f928e9c8c494ea |
+| smoke/correctness.json | 86af29c8b19b918cc2f8eaf17a138ae9314eace489f47ecbe3b63c2d4e114ed0 |
+| reuse/manifest.json | 4b8afd2277a73ed2035d9e58a8deb4e5600bd383898333d775883c612d8cd886 |
+| reuse/correctness.json | d30be6dc5e0ff33fccd715afd9c274c5a8a8e4c732bf1bf3c57850b610da7f7d |
+
+Only manifest.json, correctness.json and summary.md exist in each CPU run
+directory; there are no timing files. Production `torchyand/`, dependencies and
+CI configuration match the baseline (local git diff empty). Whitespace check
+passed. The 43 skipped tests are not counted as hardware coverage.
+
+| Required state | Actual result |
+| --- | --- |
+| CPU_HARNESS | PASS |
+| CPU_REGRESSION | PASS |
+| TPU_DEVICE | NOT RUN |
+| XLA_COMPILE | NOT RUN |
+| TPU_BENCHMARK | NOT RUN |
+| TPU_ALLOCATED | NO |
+
+Scientific scope: RESEARCH_READY; no TPU tolerance approval inferred.
+Architect review: pending PR review. No merge performed by Codex.
 
 ## Next action
 
