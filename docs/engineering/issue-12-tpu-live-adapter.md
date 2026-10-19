@@ -122,3 +122,35 @@ No real sessions are created by imports, pytest or default invocation.
 | TPU_DEVICE | NOT RUN |
 | XLA_COMPILE | NOT RUN |
 | ACTUAL_CU | NOT MEASURED |
+
+### Verified implementation and commands
+
+Tested implementation SHA: `ed70a40dd36a4b3d37ff264ac8702da474bed3e8`.
+Subsequent evidence-only commits do not change runtime/tests.
+Environment: Windows 11 build 26200, Anaconda Python 3.14.6,
+torch 2.14.1+cpu, pytest 9.0.3. OMP_NUM_THREADS=1, MKL_NUM_THREADS=1.
+
+- `python -m pytest tests/test_tpu_live_adapter.py tests/test_tpu_safe_adapter.py tests/test_colab_tpu_guard.py -q`:
+  **144 passed in 51.73s**, exit 0. Includes 46 new adapter checks and 98 reused
+  safe-adapter/independent-watchdog checks, all CPU/Mock.
+- Default `python tools/tpu_live_adapter.py`: DRY_RUN, exit 0; no Colab process.
+- `git diff --check origin/main`: exit 0.
+
+Coverage includes exact hardware/authorization, zero subprocess by default,
+no double allocation, realistic named/orphan listings, lost response, wrong
+hardware, version mismatch, probe timeout/interruption, corrupted mapping,
+misleading stop, persistent assignment, outage, dead watchdog, expired deadline,
+exact CLI bridge argv, interactive auth veto and auth-exit false-empty protection.
+No inferred real TPU performance, real release or CU measurements.
+- `python -m pytest tests/ -q`: **1394 passed, 43 skipped, 1 warning in
+  108.62s**, exit 0, at the implementation SHA above. Warning is the existing
+  torch.jit.script / Python 3.14 compatibility FutureWarning in the MVSK oracle.
+- Final diff: four files, isolated to tools, tests and this note. Local ignored
+  command logs: benchmarks/results/issue-12/scoped-final.txt and regression-final.txt.
+  The counts and commands above are the sanitized public evidence; private
+  session files and credential material are not included.
+
+CPU_TESTS=PASS; MOCK_CLEANUP=PASS. Next: Architect independent T2 review of this
+PR. No automatic merge/experiment follows. After acceptance, a separate explicit
+bounded experiment command may start the first real probe; price research is
+not a prerequisite.
