@@ -9,7 +9,7 @@ scientific draft [PR #2](https://github.com/JohnnyZPiggy/TorchYAND/pull/2).
 
 **OFFLINE_PREFLIGHT_PASS** means the requested inspection and proposal are complete,
 not that TPU execution is ready or verified. **TPU_ALLOCATED=NO;
-TPU_BENCHMARK=NOT RUN; SESSION_COUNT=0** at the actual server checks recorded in
+TPU_BENCHMARK=NOT RUN; SESSION_COUNT=0** at the single server check recorded in
 [CLI evidence](issue-3-cli-evidence.txt). No session was created, connected to,
 installed on, restarted or stopped. No accelerator quota was requested.
 
@@ -49,8 +49,12 @@ Observed help interfaces (only help invoked):
 - `stop --session <name>` describes explicit shutdown; `sessions` is the read-only
   server check. Actual shutdown is NOT TESTED because nothing was allocated.
 
-`colab sessions` returned `No active sessions found on server` before and after
-inspection. No `BLOCKED_TPU_CLI` is indicated by missing selection flags; actual
+The attached transcript records one `colab sessions` invocation, after the
+`stop --help` output and before `ssh --help`. It returned
+`No active sessions found on server`. This is a one-time observation, not
+evidence of continuous session monitoring or a before/after pair. The previous
+wording overstated what the attachment recorded and is corrected here; no
+missing command has been reconstructed. No `BLOCKED_TPU_CLI` is indicated by missing selection flags; actual
 provisioning/connection may still fail later. No OAuth or credential files read.
 
 ## Version compatibility matrix
@@ -174,7 +178,7 @@ breakdown, nonpositive_curvature and max_iter_reached. A short K budget can
 legitimately reach max_iter. Status differences must be reported, not hidden by
 a loose solution tolerance.
 
-Provisional numerical acceptance for Scientist/Architect review: at highest,
+**PROVISIONAL** numerical acceptance for Scientist/Architect review: at highest,
 kernel rtol=5e-5, atol=5e-6; PCG solution/residual rtol=5e-4, atol=5e-5, exact
 boolean/status agreement away from stopping thresholds. Record per-output
 maximum absolute error and relative norm error against CPU float64. high/default
@@ -246,12 +250,25 @@ runtime or publication verification.
 
 Local CPU regression command: PowerShell sets OMP_NUM_THREADS=1 and
 MKL_NUM_THREADS=1, then runs `D:\software\anaconda3\python.exe -m pytest tests/ -q`.
-Result: **1226 passed, 43 skipped, 1 warning in 71.06s** (exit 0).
+The initial cycle reported **1226 passed, 43 skipped, 1 warning in 71.06s**
+(exit 0), but did not attach raw output. Treat that historical timing as
+**CODEX_REPORTED / INDEPENDENTLY_UNVERIFIED**. The review follow-up reruns the
+CPU command and attaches genuine environment, terminal output and process exit
+codes in [CPU evidence](issue-3-cpu-evidence.txt). The new run is separate evidence,
+not a reconstruction of the historical run. New captured result:
+**1226 passed, 43 skipped, 1 warning in 61.40s; pytest exit code 0**.
+Environment command exit code 0; Python 3.14.6, torch 2.14.1+cpu, CUDA False.
 The warning reports TorchScript limitations on Python 3.14; the skipped cases
 are not counted as TPU coverage. No native compilation or TPU/XLA
 compilation was attempted. This documentation proposal introduces no executable
 logic and no new dependencies. Source and documentation diff checks are local.
 
-Next action: Architect reviews this offline report and PR #2 with the Scientist;
+Review corrections address the [Architect REQUEST_CHANGES](https://github.com/JohnnyZPiggy/TorchYAND/pull/4#issuecomment-6275745537):
+the session claim now matches the one attached invocation; a new CPU transcript
+supplies reproducible execution evidence; tolerances remain PROVISIONAL and
+2.8.0 remains only a documentation-level compatibility candidate. Actual Colab
+runtime compatibility and TPU/XLA operation remain UNVERIFIED / NOT RUN.
+
+Next action: Architect re-reviews this evidence update to PR #4 and PR #2 with the Scientist;
 approve/revise the experiment contract before implementation or requesting a
 separate numeric TPU resource budget. Keep #3 open via `Refs #3`, not `Closes`.

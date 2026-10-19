@@ -1,0 +1,37 @@
+Local CPU evidence capture; no TPU/XLA execution.
+Captured at (UTC): 2026-10-19T19:45:26.8287152Z
+torchyand Git tree SHA: 6784dd8a3a05b5ca1ceb60b0ea1c6fd7f22d21a1
+Algorithm commit: 4d428c0e178c4f0d32e82e8e8ba497805ed66e67
+PowerShell: $env:OMP_NUM_THREADS='1'; $env:MKL_NUM_THREADS='1'
+Command: D:\software\anaconda3\python.exe -c "import sys,torch; print(sys.version); print(torch.__version__); print(torch.cuda.is_available())"
+3.14.6 | packaged by Anaconda, Inc. | (main, Jul  9 2026, 14:29:05) [MSC v.1942 64 bit (AMD64)]
+2.14.1+cpu
+False
+Environment exit code: 0
+Command: D:\software\anaconda3\python.exe -m pytest tests/ -q
+.................................................................ssss... [  5%]
+................................................ss...................... [ 11%]
+.........................................ss............................. [ 17%]
+...............................................ss....................... [ 22%]
+................................ss..........................s........... [ 28%]
+......................................ss................................ [ 34%]
+.....ss.................................................ss.............. [ 39%]
+........................................................................ [ 45%]
+........................................................................ [ 51%]
+........................................................................ [ 56%]
+........................................................................ [ 62%]
+...............................................ssssss................... [ 68%]
+............................................ss.......................... [ 73%]
+....................................................ss.................. [ 79%]
+..........................................ss............................ [ 85%]
+..........................ss............................................ [ 90%]
+.......ss.s.s.s.s....................................................ss. [ 96%]
+...........................................ss                            [100%]
+============================== warnings summary ===============================
+tests/test_mvsk_oracle.py::test_autograd_reference[dtype0-coeff0]
+  D:\software\anaconda3\Lib\site-packages\torch\jit\_script.py:1485: FutureWarning: `torch.jit.script` is not supported in Python 3.14+ and may break. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1226 passed, 43 skipped, 1 warning in 61.40s (0:01:01)
+Pytest exit code: 0
