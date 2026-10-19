@@ -233,3 +233,13 @@ def test_bridge_exact_dispatch_auth_guard_and_no_double_allocate(tmp_path, monke
     assert seen[0][1:3]==['--config',str(directory/'cli-sessions.json')]
     with pytest.raises(FileExistsError): a.bridge(directory,'allocate')
     with pytest.raises(ValueError,match='ALLOWLISTED'): a.bridge(directory,'ssh')
+
+
+def test_dead_watchdog_blocks_allocation(tmp_path):
+    directory=tmp_path/'dead-before';cli=FakeCLI(directory)
+    class DeadBefore(FakeWatch):
+        def poll(self): return 1
+    result=a.run(permit(),record(),directory,cli_factory=lambda _:cli,
+                 watch_factory=lambda d:DeadBefore(d,cli))
+    assert result['outcome']=='BLOCKED'
+    assert 'allocate' not in cli.calls and 'probe' not in cli.calls and 'stop' not in cli.calls
