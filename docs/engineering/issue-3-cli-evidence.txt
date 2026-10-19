@@ -1,0 +1,93 @@
+Actual offline command output, 2026-10-19 Europe/Zurich.
+PowerShell: wsl -d Ubuntu-24.04 -- bash -lc '<commands below>'
+Commands in order: uname -r; python3 --version; colab version;
+colab new --help; colab exec --help; colab stop --help;
+colab sessions; colab ssh --help
+No allocation/execution/SSH command was invoked (only --help).
+6.18.54.1-microsoft-standard-WSL2
+Python 3.12.3
+Version: 0.7.4
+
+ Usage: colab new [OPTIONS]
+
+ Create a new session
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --session   -s      <str>  Session name                                      │
+│ --tpu               <str>  TPU accelerator variant. Supported: v5e1, v6e1.   │
+│ --gpu               <str>  GPU accelerator variant. Supported: T4, L4, G4,   │
+│                            H100, A100.                                       │
+│                            If omitted (along with --tpu), a CPU runtime is   │
+│                            created.                                          │
+│                            Availability varies by Colab subscription tier.   │
+│ --high-mem                 Request a high-RAM machine shape (CPU, T4, A100,  │
+│                            etc.). Requires Colab Pro or Pro+ entitlement.    │
+│                            Ignored for accelerators that only offer a single │
+│                            shape (L4, v5e1, v6e1).                           │
+│ --help      -h             Show this message and exit.                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+ Usage: colab exec [OPTIONS]
+
+ Execute code in a session
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --session       -s      <str>    Session name                                │
+│ --file          -f      <str>    File to execute                             │
+│ --output-image          <str>    Path to save plot                           │
+│ --timeout               <float>  Timeout in seconds for code execution       │
+│                                  [default: 30.0]                             │
+│ --env                   <str>    Set an environment variable in the remote   │
+│                                  kernel as KEY=VALUE. Repeat for multiple    │
+│                                  variables.                                  │
+│ --help          -h               Show this message and exit.                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+ Usage: colab stop [OPTIONS]
+
+ Stop a session
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --session  -s      <str>  Session name                                       │
+│ --help     -h             Show this message and exit.                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+[colab] No active sessions found on server.
+
+ Usage: colab ssh [OPTIONS]
+
+ Connect to a Colab runtime via SSH.
+
+ Bare ``colab ssh`` uses your only active session, or auto-creates one (like
+ ``colab new``) if you have none, and opens a shell in ``/content``. With
+ --proxy-mode it is a ProxyCommand-compatible WebSocket-stdio bridge; every
+ flag above still applies (``-s NAME`` creates the session if missing,
+ ``--gpu/--tpu`` set its accelerator, ``--rm`` stops it on disconnect).
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --session     -s      <str>  Session name                                    │
+│ --proxy-mode                 Act as an OpenSSH ProxyCommand-compatible       │
+│                              WebSocket-stdio bridge (reads stdin, writes     │
+│                              stdout). Use in ~/.ssh/config as `ProxyCommand  │
+│                              colab ssh --proxy-mode -s SESS`. All flags      │
+│                              below also apply here.                          │
+│ --identity    -i      <str>  SSH private key whose public key is sent in the │
+│                              X-Colab-Ssh-Pubkey header (default: first of    │
+│                              ~/.ssh/id_ed25519, id_ecdsa).                   │
+│ --gpu                 <str>  GPU accelerator for a runtime created by this   │
+│                              command (T4, L4, G4, H100, A100). Used when the │
+│                              session is auto-created.                        │
+│ --tpu                 <str>  TPU accelerator for a runtime created by this   │
+│                              command (v5e1, v6e1). Used when the session is  │
+│                              auto-created.                                   │
+│ --high-mem                   Request a high-RAM machine shape when this      │
+│                              command auto-creates a runtime.                 │
+│ --rm                         Stop the runtime when the session ends. In      │
+│                              interactive mode this applies only to a runtime │
+│                              `colab ssh` auto-created; in --proxy-mode it    │
+│                              stops the bridged session on disconnect         │
+│                              (ephemeral ~/.ssh/config host).                 │
+│ --help        -h             Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
