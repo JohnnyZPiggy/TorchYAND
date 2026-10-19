@@ -27,6 +27,8 @@ def write_json(path, value):
     temporary = path.with_suffix('.tmp')
     with temporary.open('w', encoding='utf-8') as stream:
         json.dump(value, stream, indent=2, allow_nan=False)
+        stream.flush()
+        os.fsync(stream.fileno())
     temporary.chmod(0o600)
     temporary.replace(path)
 
@@ -129,8 +131,8 @@ def cleanup(directory, state, owner, session, deadline, cli, trigger=None):
     return result
 
 
-def watchdog(directory, owner, session, deadline, buffer, parent_pid, executable=SOURCE):
-    """Independent process; a wedged benchmark cannot prevent this loop running."""
+def wait_for_trigger(directory, deadline, buffer, parent_pid):
+    """Shared bounded monitor loop; callers own their journal/cleanup schema."""
     if not math.isfinite(deadline) or not math.isfinite(buffer) or not 0 < buffer < 5 or not 0 < deadline-time.monotonic() <= 5 or parent_pid <= 0:
         raise ValueError('Invalid bounded watchdog configuration')
     reason = 'DEADLINE'
@@ -142,6 +144,12 @@ def watchdog(directory, owner, session, deadline, buffer, parent_pid, executable
         if (directory/'done').exists():
             reason = 'WORKER_FINISHED'; break
         time.sleep(.02)
+    return reason
+
+
+def watchdog(directory, owner, session, deadline, buffer, parent_pid, executable=SOURCE):
+    """Independent process; a wedged benchmark cannot prevent this loop running."""
+    reason = wait_for_trigger(directory, deadline, buffer, parent_pid)
     try:
         state = json.loads((directory/'ownership.json').read_text())
     except (OSError, ValueError):
