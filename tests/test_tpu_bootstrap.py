@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 import zipfile
 
@@ -75,7 +76,8 @@ def test_download_hash_and_failure_no_retry(tmp_path,monkeypatch,failure):
     assert len(calls)==1
 
 
-@pytest.mark.parametrize('failure',['none','old-pip','missing-option','preflight','venv','pip_target','install','pip_check','timeout'])
+@pytest.mark.parametrize('failure',['none','old-pip','missing-option','preflight','venv','pip_target','install','pip_check','timeout',
+                                  'install-resolver','install-unknown','install-metadata','missing-python'])
 def test_isolated_pipeline_with_mock_processes(tmp_path,monkeypatch,capsys,failure):
     data=manifest();calls=[]
     # Resource limits are only applied by real POSIX remote child processes.
@@ -90,6 +92,7 @@ def test_isolated_pipeline_with_mock_processes(tmp_path,monkeypatch,capsys,failu
             calls.append(argv);self.argv=argv;self.returncode=0
             text=''
             if argv[0]=='/usr/bin/python3.12' and '-c' in argv:
+                if failure=='missing-python':raise FileNotFoundError('CANARY_TOKEN /private/path')
                 text=json.dumps(dict(python='3.12.3'))
                 if failure=='preflight':self.returncode=1;text='AssertionError: ABI_MISMATCH'
             elif '--without-pip' in argv:
@@ -99,24 +102,40 @@ def test_isolated_pipeline_with_mock_processes(tmp_path,monkeypatch,capsys,failu
             elif '--version' in argv:
                 text='pip 22.2' if failure=='old-pip' else 'pip 25.0'
                 if '--python' in argv and failure=='pip_target':self.returncode=1
-            elif 'install' in argv and failure=='install':self.returncode=1
-            elif 'check' in argv and failure=='pip_check':self.returncode=1
+            elif 'install' in argv and failure.startswith('install'):
+                self.returncode=23
+                text={'install-resolver':'ERROR: ResolutionImpossible: conflicting dependencies',
+                      'install-metadata':'ERROR: torch has inconsistent Name',
+                      'install-unknown':'unrecognized issue'}.get(failure,'')
+                text+='\nBearer CANARY_TOKEN /private/CANARY_PATH https://CANARY.invalid/?token=secret'
+            elif 'check' in argv and failure=='pip_check':self.returncode=13
             elif '-c' in argv and 'importlib.metadata' in argv[-1]:text=json.dumps({n['name']:n['version'] for n in data['packages']})
             elif '-c' in argv:text='TORCHYAND_TPU_PROBE:'+json.dumps(dict(nonce='mock',status='PASS'))
             kwargs['stdout'].write(text.encode());kwargs['stdout'].flush()
-        def wait(self,timeout):
+        def wait(self,timeout=None):
+            if timeout is None:return self.returncode
             assert 0<timeout<=3500
             if failure=='timeout' and len(calls)==1:
                 # Timeout once; wait after the mocked kill completes.
-                if not hasattr(self,'raised'):self.raised=True;raise subprocess.TimeoutExpired('mock',timeout)
+                if not hasattr(self,'raised'):self.raised=True;self.returncode=-9;raise subprocess.TimeoutExpired('mock',timeout)
             return self.returncode
     monkeypatch.setattr(b.subprocess,'Popen',Child)
     monkeypatch.setattr(b.os,'killpg',lambda *a:None,raising=False)
+    monkeypatch.setattr(b.signal,'SIGKILL',9,raising=False)
     b.run(data,'mock probe','mock',3500)
     output=capsys.readouterr().out
     report=json.loads(output.split('TORCHYAND_BOOTSTRAP:')[1])
     assert report['status']==('PASS' if failure=='none' else 'BLOCKED')
     if failure=='preflight':assert report['reason']=='ABI_MISMATCH'
+    if failure.startswith('install'):
+        diagnostic=report['command_failure']
+        assert diagnostic['returncode']==23 and diagnostic['stage']=='install'
+        expected={'install-resolver':'DEPENDENCY_CONFLICT','install-metadata':'INVALID_WHEEL'}.get(failure,'UNKNOWN')
+        assert diagnostic['category']==expected and diagnostic['output_bytes']>0
+    if failure=='pip_check':assert report['command_failure']['returncode']==13 and report['command_failure']['stage']=='pip_check'
+    if failure=='timeout':assert report['command_failure']['returncode']==-9
+    if failure=='missing-python':assert report['reason']=='PYTHON312_UNAVAILABLE' and 'command_failure' not in report
+    assert 'CANARY' not in output and 'Bearer' not in output
     if failure=='none':
         installs=[a for a in calls if 'install' in a]
         assert len(installs)==1 and '--python' in installs[0] and '--no-index' in installs[0]
@@ -124,6 +143,40 @@ def test_isolated_pipeline_with_mock_processes(tmp_path,monkeypatch,capsys,failu
         assert any('check' in a and '--python' in a for a in calls)
     else:assert 'TORCHYAND_TPU_PROBE:' not in output
     assert not any('ensurepip' in x or '--upgrade' in x or '--no-deps' in x for a in calls for x in a)
+
+
+@pytest.mark.parametrize('text,category',[
+    ('ERROR: No matching distribution found for torch','NO_MATCHING_DISTRIBUTION'),
+    ('ERROR: Package requires a different Python','REQUIRES_PYTHON'),
+    ('ERROR: Wheel torch is invalid','INVALID_WHEEL'),
+    ('PermissionError: Permission denied','INSTALL_PERMISSION'),
+    ('Could not find the Python interpreter','PIP_TARGET_ERROR'),
+    ('unrecognized failure','UNKNOWN')])
+def test_bounded_error_classification(text,category):
+    payload=b'Bearer CANARY_TOKEN https://CANARY.invalid /private/path\n'+b'x'*100000+text.encode()
+    diagnostic=b.command_failure('install',7,io.BytesIO(payload))
+    assert diagnostic==dict(stage='install',returncode=7,output_bytes=len(payload),inspected_bytes=b.SCAN_LIMIT,category=category)
+    assert 'CANARY' not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize('key,value',[('returncode',True),('returncode',0),('returncode',2**31),
+    ('category','CANARY_TOKEN'),('stage','CANARY_PATH'),('output_bytes',b.LOG_LIMIT+1),
+    ('output_bytes',-1),('inspected_bytes',b.SCAN_LIMIT+1),('inspected_bytes',True)])
+def test_host_failure_projection_rejects_invalid_fields(key,value):
+    diagnostic=dict(stage='install',returncode=23,output_bytes=100000,inspected_bytes=65536,category='UNKNOWN')
+    diagnostic[key]=value
+    with pytest.raises(ValueError):b.validate_failure(diagnostic)
+
+
+def test_actual_local_child_exit_code_is_not_adapter_exit_one():
+    # No pip/install/network: a real local subprocess with synthetic pip output.
+    with tempfile.TemporaryFile() as log:
+        child=subprocess.run([sys.executable,'-I','-c',
+            'import sys; print("ResolutionImpossible Bearer CANARY_TOKEN /private/path"); sys.exit(37)'],
+            stdout=log,stderr=subprocess.STDOUT,timeout=10)
+        diagnostic=b.command_failure('install',child.returncode,log)
+    assert diagnostic['returncode']==37 and diagnostic['category']=='DEPENDENCY_CONFLICT'
+    assert 'CANARY' not in json.dumps(diagnostic)
 
 
 def test_timeout_and_untrusted_error_do_not_print_secret(monkeypatch,capsys):

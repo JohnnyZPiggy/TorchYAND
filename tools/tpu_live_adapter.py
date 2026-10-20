@@ -169,7 +169,10 @@ def finish_evidence(evidence, result):
     guard.write_json(evidence/'summary.json', safe)
     event(evidence, 'lifecycle', 'terminal', result['outcome'])
     manifest = {}
-    for name in ('context.json', 'timeline.jsonl', 'summary.json'):
+    names = ['context.json', 'timeline.jsonl', 'summary.json']
+    if (evidence/'bootstrap.json').exists():
+        names.append('bootstrap.json')
+    for name in names:
         payload = (evidence/name).read_bytes()
         manifest[name] = dict(sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload))
     # A dying worker's child may append later: seal the exact observed prefix.
@@ -521,7 +524,7 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
             raise RuntimeError('WATCHDOG_DIED_BEFORE_PROBE')
         output = cli.call('probe')
         if permit.isolated_cp312:
-            from tools.tpu_bootstrap import STAGES, REASONS
+            from tools.tpu_bootstrap import STAGES, REASONS, validate_failure
             records = [line.removeprefix('TORCHYAND_BOOTSTRAP:') for line in output.splitlines()
                        if line.startswith('TORCHYAND_BOOTSTRAP:')]
             if len(records) != 1:
@@ -543,6 +546,14 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
             reason = report.get('reason', '')
             if reason in REASONS:
                 bootstrap['reason'] = reason
+            if 'command_failure' in report:
+                failure = validate_failure(report['command_failure'])
+                if failure['stage'] != bootstrap['stage'] or bootstrap['status'] != 'BLOCKED':
+                    raise ValueError('COMMAND_FAILURE_STAGE_MISMATCH')
+                bootstrap['command_failure'] = failure
+            # Fsync safe evidence before signaling completion to owned cleanup.
+            guard.write_json(evidence/'bootstrap.json', bootstrap)
+            event(evidence, 'bootstrap', 'diagnostic_persisted', bootstrap['status'])
             if bootstrap['status'] != 'PASS':
                 raise ValueError('ISOLATED_BOOTSTRAP_BLOCKED')
         markers = [line.removeprefix('TORCHYAND_TPU_PROBE:') for line in output.splitlines()

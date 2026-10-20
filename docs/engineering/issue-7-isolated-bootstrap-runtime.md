@@ -101,3 +101,25 @@ v5e1 session**, using new compatible records for the merged SHA and finite chose
 duration, without another CPU rehearsal. Recheck prerequisites in that actual TPU
 image; missing Python/pip/platform support is one truthful BLOCKED outcome with
 cleanup, not a trigger for blind changes or repeated allocations. No new billing.
+
+## Failed-command evidence
+
+Nonzero subprocess returns now include a `command_failure` object: actual child
+`returncode` (including negative signal codes), stage, captured output byte count,
+inspected byte count, and a fixed error category. This is distinct from adapter
+exit=1. The existing private file cap is 1 MiB; classification inspects at most its
+last 64 KiB. Categories are NO_MATCHING_DISTRIBUTION, DEPENDENCY_CONFLICT,
+REQUIRES_PYTHON, INVALID_WHEEL (including inconsistent package-name metadata),
+INSTALL_PERMISSION, PIP_TARGET_ERROR, or UNKNOWN. These describe observed message
+signatures, not independently proven root causes. No distribution name or raw text
+is emitted. Unknown output remains UNKNOWN, even when it contains credentials,
+paths, URLs or stack traces. Timeout kills retain the actual post-kill child code.
+
+After nonce validation, the adapter independently checks integer types/ranges,
+byte bounds, stage consistency and category membership. It fsyncs the projected
+`bootstrap.json` and records a timeline event **before notifying the watchdog of
+worker completion**; the final summary and manifest also contain/seal the evidence.
+Invalid diagnostics cannot authorize success or prevent owned cleanup. Raw pip
+output stays transient in the existing bounded remote buffer: this change does not
+add an untrusted raw-log transport around the established host redaction boundary.
+The fourth run's lost pip error cannot be reconstructed from this code change.
