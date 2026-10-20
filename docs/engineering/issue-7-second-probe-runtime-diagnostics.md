@@ -95,3 +95,29 @@ installed in that environment. Windows pytest evidence is recorded below.
 | TPU_PJRT | NOT VERIFIED |
 | LOCAL_CPU_MOCK | See completed results below |
 | THIRD_TPU_ALLOCATION | NOT RUN |
+
+## Completed local evidence
+
+Tested implementation SHA: `44f6e7fd0ee631afea8add519e59d352d798b133`.
+Later evidence-only commits do not change runtime/tests. Windows 11 build 26200,
+Anaconda Python 3.14.6, torch 2.14.1+cpu, pytest 9.0.3;
+OMP_NUM_THREADS=1, MKL_NUM_THREADS=1.
+
+- `python -m pytest tests/test_tpu_live_adapter.py tests/test_tpu_safe_adapter.py tests/test_colab_tpu_guard.py -q`:
+  **253 passed in 54.07s**, exit 0 (155 adapter +98 prior safe-adapter/guard checks).
+- Existing WSL CLI Python 3.15.0 stdlib-only check: PASS, exit 0; local historical
+  record correlation and synthetic diagnostic persistence only, with network and
+  subprocess vetoes. It installed nothing; WSL pytest suite NOT RUN.
+- Default `python tools/tpu_live_adapter.py`: DRY_RUN, exit 0; no remote access.
+  `git diff --check origin/main`: exit 0.
+- `python -m pytest tests/ -q`: **1503 passed, 43 skipped, 1 warning in
+  114.25s**, exit 0, at the exact implementation SHA above. Warning remains
+  the existing torch.jit.script / Python 3.14 FutureWarning in the MVSK oracle.
+- Ignored local logs: benchmarks/results/issue-16/scoped.txt and regression.txt;
+  stdlib WSL local-check.py is also ignored. No private endpoint/history/credential
+  material is committed. Canary stderr/messages/invalid module metadata do not
+  appear in persistent mock summaries/timelines/manifests.
+
+LOCAL_CPU_MOCK=PASS. Next: independent Architect T2 review. Historical missing
+module remains UNKNOWN; real TPU/PJRT is NOT VERIFIED; no third allocation or
+remote bootstrap is triggered by this delivery or a later merge.
