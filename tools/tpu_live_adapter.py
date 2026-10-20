@@ -109,6 +109,7 @@ def authorize(record, instruction, sha, merged_sha, dirty, cli_python, platform=
     now = datetime.now(timezone.utc)
     expected = {key: value for key, value in record.items() if key != 'approval_ref'}
     previous_update = None
+    expiries = []
     for reference, kind in ((permit.approval_ref, 'TPU_RESOURCE_APPROVAL'),
                             (instruction, 'TPU_SMOKE_EXECUTION')):
         comment_id = int(reference.rsplit('-', 1)[1])
@@ -136,6 +137,9 @@ def authorize(record, instruction, sha, merged_sha, dirty, cli_python, platform=
         if (body != scope or any(type(body.get(k)) is not type(v) for k, v in scope.items())):
             raise ValueError('SCIENTIST_COMMENT_SCOPE_MISMATCH')
         previous_update = updated
+        expiries.append(expires)
+    if datetime.now(timezone.utc) >= min(expiries):
+        raise ValueError('SCIENTIST_COMMENT_EXPIRED_DURING_VERIFICATION')
     return permit
 
 

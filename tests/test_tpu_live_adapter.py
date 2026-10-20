@@ -394,3 +394,16 @@ def test_github_transport_failures(monkeypatch,failure):
         return Response()
     monkeypatch.setattr(a.urllib.request,'urlopen',opening)
     with pytest.raises((ValueError,TimeoutError)): REAL_GITHUB_JSON(target)
+
+
+def test_expiry_during_github_reads_is_rejected(monkeypatch,offline_github):
+    start=datetime.now(timezone.utc)
+    class Clock:
+        calls=0
+        @classmethod
+        def now(cls,tz):
+            cls.calls+=1
+            return start if cls.calls==1 else start+timedelta(hours=1)
+        fromisoformat=staticmethod(datetime.fromisoformat)
+    monkeypatch.setattr(a,'datetime',Clock)
+    with pytest.raises(ValueError,match='EXPIRED_DURING_VERIFICATION'): permit()
