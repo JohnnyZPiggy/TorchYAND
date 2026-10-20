@@ -604,3 +604,133 @@ def test_preflight_timeout_retains_terminal_blocked_record(tmp_path,monkeypatch)
     assert saved['outcome']=='BLOCKED' and saved['cleanup']['status']=='NOT_NEEDED'
     assert not (tmp_path/'never').exists()
     assert 'CANARY' not in ''.join(p.read_text() for p in evidence.iterdir())
+
+
+def simulated_probe(monkeypatch, *, fail_at=None, missing=None, other_error=False, result=None):
+    import builtins, io, contextlib
+    from types import ModuleType
+    torch=ModuleType('torch');torch.__version__='2.8.0'
+    class Tensor:
+        def __matmul__(self,other): return self
+        def cpu(self): return self
+        def tolist(self): return [[3.],[7.]] if result is None else result
+    torch.tensor=lambda *args,**kwargs:Tensor();torch.ones=lambda *args,**kwargs:Tensor()
+    xla=ModuleType('torch_xla');xla.__version__='2.8.0';xla.__path__=[]
+    xla.device=lambda:SimpleNamespace(type='xla');xla.real_devices=lambda:['TPU:0']
+    xla.sync=lambda wait:None
+    runtime=ModuleType('torch_xla.runtime');runtime.device_type=lambda:'TPU'
+    runtime.global_runtime_device_attributes=lambda:[{'device_kind':'TPU v5 lite'}]
+    xla.runtime=runtime
+    for module in (torch,xla,runtime): monkeypatch.setitem(sys.modules,module.__name__,module)
+    importing=builtins.__import__
+    def fake_import(name,*args,**kwargs):
+        if name==fail_at:
+            if other_error: raise RuntimeError('CANARY_SECRET /private/path https://secret.invalid')
+            raise ModuleNotFoundError('CANARY_SECRET /private/path https://secret.invalid',name=missing)
+        return importing(name,*args,**kwargs)
+    monkeypatch.setattr(builtins,'__import__',fake_import)
+    monkeypatch.setenv('PJRT_DEVICE','CPU')
+    output=io.StringIO()
+    with contextlib.redirect_stdout(output): exec(a.PROBE.replace('NONCE',repr('LOCAL_NONCE')), {})
+    return json.loads(output.getvalue().split('TORCHYAND_TPU_PROBE:')[1])
+
+
+@pytest.mark.parametrize('fail_at,missing,stage',[
+    ('torch','torch','import_torch'),('torch_xla','torch_xla','import_torch_xla'),
+    ('torch_xla','numpy._core','import_torch_xla'),
+    ('torch_xla.runtime','torch_xla.runtime','import_torch_xla_runtime'),
+    ('torch_xla.runtime','numpy','import_torch_xla_runtime'),
+    ('torch_xla','torch','import_torch_xla')])
+def test_embedded_probe_reports_actual_import_stage_and_module(monkeypatch,fail_at,missing,stage):
+    report=simulated_probe(monkeypatch,fail_at=fail_at,missing=missing)
+    assert report['status']=='BLOCKED' and report['error_class']=='ModuleNotFoundError'
+    assert report['stage']==stage and report['missing_module']==missing
+    if fail_at!='torch': assert report['torch']=='2.8.0'
+    assert 'CANARY' not in json.dumps(report)
+
+
+@pytest.mark.parametrize('missing',[None,123,'','a'*97,'https://CANARY.invalid/token','/private/CANARY','torch\nCANARY','x..y','-x'])
+def test_embedded_and_host_diagnostics_redact_invalid_module_names(monkeypatch,missing):
+    report=simulated_probe(monkeypatch,fail_at='torch_xla',missing=missing)
+    assert report['missing_module']=='UNKNOWN'
+    assert a.probe_diagnostic(dict(report,missing_module=missing))['missing_module']=='UNKNOWN'
+    assert 'CANARY' not in json.dumps(report)
+
+
+def test_nonmodule_exception_and_success_diagnostics(monkeypatch):
+    report=simulated_probe(monkeypatch,fail_at='torch_xla',other_error=True)
+    assert report['error_class']=='RuntimeError' and report['stage']=='import_torch_xla'
+    assert 'missing_module' not in report and 'CANARY' not in json.dumps(report)
+
+
+def test_embedded_success_retains_device_sync_and_matmul_proof(monkeypatch):
+    report=simulated_probe(monkeypatch)
+    assert report['status']=='PASS' and report['stage']=='complete'
+    assert report['PJRT']=='TPU' and report['real_devices']==['TPU:0']
+    assert report['result']==[[3.],[7.]] and report['torch']==report['torch_xla']=='2.8.0'
+
+
+@pytest.mark.parametrize('variant,expected',[
+    ('pass','TPU_PROBE_PASS'),('blocked','DEVICE_OR_PROBE_BLOCKED'),
+    ('legacy-blocked','DEVICE_OR_PROBE_BLOCKED'),('blocked-other','DEVICE_OR_PROBE_BLOCKED'),
+    ('json-array','DEVICE_OR_PROBE_BLOCKED'),
+    ('nonzero','DEVICE_OR_PROBE_BLOCKED'),('missing-marker','DEVICE_OR_PROBE_BLOCKED'),
+    ('multiple','DEVICE_OR_PROBE_BLOCKED'),('invalid-json','DEVICE_OR_PROBE_BLOCKED'),
+    ('no-nonce','DEVICE_OR_PROBE_BLOCKED'),('wrong-nonce','DEVICE_OR_PROBE_BLOCKED'),
+    ('wrong-pjrt','DEVICE_OR_PROBE_BLOCKED'),('no-device','DEVICE_OR_PROBE_BLOCKED'),
+    ('numerical','DEVICE_OR_PROBE_BLOCKED'),('unsafe-diagnostic','DEVICE_OR_PROBE_BLOCKED')])
+def test_probe_stdout_with_stderr_is_parsed_and_persisted_safely(tmp_path,variant,expected):
+    directory=tmp_path/variant;cli=FakeCLI(directory)
+    original=cli.call
+    def call(op):
+        if op!='probe': return original(op)
+        data=a.state(directory)
+        payload=dict(nonce=data['name'],status='PASS',stage='complete',PJRT='TPU',real_devices=['TPU:0'],result=[[3.],[7.]])
+        if variant in ('blocked','unsafe-diagnostic'):
+            payload.update(status='BLOCKED',stage='import_torch_xla',error_class='ModuleNotFoundError',missing_module='numpy._core')
+        if variant=='legacy-blocked': payload=dict(nonce=data['name'],status='BLOCKED',python='3.13.16',error='ModuleNotFoundError')
+        if variant=='blocked-other': payload.update(status='BLOCKED',stage='versions',error_class='RuntimeError',missing_module='CANARY_SECRET')
+        if variant=='unsafe-diagnostic': payload.update(stage='CANARY_SECRET/path',missing_module='https://CANARY.invalid')
+        if variant=='no-nonce': del payload['nonce']
+        if variant=='wrong-nonce': payload['nonce']='CANARY_WRONG'
+        if variant=='wrong-pjrt': payload['PJRT']='CPU'
+        if variant=='no-device': payload['real_devices']=[]
+        if variant=='numerical': payload['result']=[[0.],[0.]]
+        output='TORCHYAND_TPU_PROBE:'+json.dumps(payload)
+        if variant=='missing-marker': output='no record CANARY_SECRET'
+        if variant=='multiple': output+='\n'+output
+        if variant=='invalid-json': output='TORCHYAND_TPU_PROBE:{broken CANARY_SECRET'
+        if variant=='json-array': output='TORCHYAND_TPU_PROBE:["CANARY_SECRET"]'
+        def runner(argv,**kwargs):
+            assert kwargs['shell'] is False and kwargs['timeout']<=180
+            return subprocess.CompletedProcess(argv,1 if variant=='nonzero' else 0,output,'CANARY_SECRET Authorization: Bearer TOKEN')
+        return a.CLI(directory,runner).call(op)
+    cli.call=call
+    result=a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    assert result['outcome']==expected and result['cleanup']['status']=='RELEASED'
+    evidence=evidence_for(directory);saved=json.loads((evidence/'summary.json').read_text())
+    if variant=='blocked':
+        assert saved['probe_diagnostic']==dict(status='BLOCKED',stage='import_torch_xla',error_class='ModuleNotFoundError',missing_module='numpy._core')
+    if variant=='legacy-blocked':
+        assert saved['probe_diagnostic']==dict(status='BLOCKED',stage='UNKNOWN',error_class='ModuleNotFoundError',missing_module='UNKNOWN')
+    if variant=='blocked-other':
+        assert saved['probe_diagnostic']['error_class']=='RuntimeError'
+        assert 'missing_module' not in saved['probe_diagnostic']
+    if variant=='unsafe-diagnostic':
+        assert saved['probe_diagnostic']['stage']==saved['probe_diagnostic']['missing_module']=='UNKNOWN'
+    if variant in ('nonzero','wrong-nonce','no-nonce','invalid-json','multiple','missing-marker','json-array'):
+        assert 'probe_diagnostic' not in saved
+    assert saved['TPU_PJRT']=='NOT VERIFIED' and saved['execution_mode']=='CPU_MOCK'
+    assert 'CANARY' not in ''.join(p.read_text() for p in evidence.iterdir())
+    rows=[r for r in timeline(evidence) if r['stage']=='probe' and r['event']=='subprocess_return']
+    assert rows[-1]['stderr_present'] is True and rows[-1]['stderr_bytes']>0
+    assert cli.calls.count('allocate')==cli.calls.count('stop')==1
+
+
+@pytest.mark.parametrize('operation',['version','sessions','allocate','stop'])
+def test_nonprobe_stderr_remains_fatal(tmp_path,operation):
+    directory=tmp_path/'strict';cli=FakeCLI(directory)
+    a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    def runner(argv,**kwargs): return subprocess.CompletedProcess(argv,0,a.EMPTY,'CANARY_SECRET')
+    with pytest.raises(RuntimeError): a.CLI(directory,runner).call(operation)
+    assert 'CANARY' not in ''.join(p.read_text() for p in evidence_for(directory).iterdir())
