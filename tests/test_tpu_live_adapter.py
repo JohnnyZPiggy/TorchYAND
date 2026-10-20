@@ -592,3 +592,15 @@ def test_nonfinite_probe_deadline_cannot_bypass_budget(tmp_path,monkeypatch):
     for deadline in (None,float('inf'),float('nan')):
         with pytest.raises(ValueError,match='FINITE_PROBE_HOST_DEADLINE'):
             a.bridge(tmp_path/'bridge','probe',deadline)
+
+
+def test_preflight_timeout_retains_terminal_blocked_record(tmp_path,monkeypatch):
+    permitted=permit()
+    def timeout(*args,**kwargs): raise TimeoutError('CANARY_AUTH')
+    monkeypatch.setattr(a,'authorize',timeout)
+    with pytest.raises(TimeoutError): a.run(permitted,record(),tmp_path/'never')
+    evidence=next(a.EVIDENCE_ROOT.iterdir())
+    saved=json.loads((evidence/'summary.json').read_text())
+    assert saved['outcome']=='BLOCKED' and saved['cleanup']['status']=='NOT_NEEDED'
+    assert not (tmp_path/'never').exists()
+    assert 'CANARY' not in ''.join(p.read_text() for p in evidence.iterdir())

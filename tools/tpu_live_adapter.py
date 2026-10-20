@@ -423,14 +423,20 @@ def start_watch(directory):
 def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
     evidence = new_evidence(permit.source_sha, permit.seconds)
     event(evidence, 'lifecycle', 'parent_start')
-    if authorize(record, permit.instruction_ref, permit.source_sha, permit.source_sha, False,
-                 permit.cli_python, platform='linux', evidence=evidence) != permit:
-        raise ValueError('PERMIT_RECORD_MISMATCH')
-    if not directory.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
-        raise ValueError('PRIVATE_OS_TEMP_DIRECTORY_REQUIRED')
+    mode = 'LIVE' if cli_factory is CLI and watch_factory is start_watch else 'CPU_MOCK'
+    try:
+        if authorize(record, permit.instruction_ref, permit.source_sha, permit.source_sha, False,
+                     permit.cli_python, platform='linux', evidence=evidence) != permit:
+            raise ValueError('PERMIT_RECORD_MISMATCH')
+        if not directory.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
+            raise ValueError('PRIVATE_OS_TEMP_DIRECTORY_REQUIRED')
+    except (Exception, KeyboardInterrupt) as error:
+        event(evidence, 'preflight', 'error', 'BLOCKED', error)
+        finish_evidence(evidence, dict(outcome='BLOCKED', cleanup=dict(status='NOT_NEEDED'),
+                        error=type(error).__name__, source_sha=permit.source_sha, execution_mode=mode))
+        raise
     directory.mkdir(parents=True, exist_ok=False); directory.chmod(0o700)
     os.umask(0o077) if os.name == 'posix' else None
-    mode = 'LIVE' if cli_factory is CLI and watch_factory is start_watch else 'CPU_MOCK'
     started = json.loads((evidence/'context.json').read_text())['started']
     data = dict(schema=1, execution_mode=mode, permit=asdict(permit), name='torchyand-live-'+uuid.uuid4().hex,
                 started_utc=datetime.now(timezone.utc).isoformat(), deadline=started+permit.seconds, evidence=str(evidence),
