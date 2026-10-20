@@ -40,8 +40,9 @@ def github_records():
 
 
 @pytest.fixture(autouse=True)
-def offline_github(monkeypatch):
+def offline_github(monkeypatch, tmp_path):
     # Every positive record is served by an explicit offline fake, never live GitHub.
+    monkeypatch.setattr(a, 'EVIDENCE_ROOT', tmp_path/'durable')
     items=github_records()
     monkeypatch.setattr(a,'github_json',lambda url:deepcopy(items[url]))
     return items
@@ -95,9 +96,10 @@ class FakeCLI:
 class FakeWatch:
     def __init__(self, directory, cli):
         self.directory, self.cli = directory, cli
+        self.evidence = a.state(directory).get('evidence')
         (directory/'watch-ready').touch()
     def poll(self): return None
-    def wait(self, timeout): a.release(self.directory, self.cli, 'MOCK_FINALLY'); return 0
+    def wait(self, timeout): a.release(self.directory, self.cli, 'MOCK_FINALLY', self.evidence); return 0
     def kill(self): raise AssertionError('not needed')
 
 
@@ -143,7 +145,9 @@ def test_second_step_merged_source_and_platform():
 def test_default_and_incomplete_activation_zero_subprocess(monkeypatch,argv):
     def veto(*args,**kwargs): pytest.fail('No process permitted')
     monkeypatch.setattr(subprocess,'Popen',veto); monkeypatch.setattr(subprocess,'run',veto)
-    if not argv: assert a.main(argv)==0
+    if not argv:
+        assert a.main(argv)==0
+        assert not a.EVIDENCE_ROOT.exists()
     else:
         with pytest.raises(SystemExit) as error: a.main(argv)
         assert error.value.code==2
@@ -236,7 +240,7 @@ def test_bridge_exact_dispatch_auth_guard_and_no_double_allocate(tmp_path, monke
     real_validate=a.validate_record
     monkeypatch.setattr(a,'validate_record',lambda *args:real_validate(*args[:6],platform='linux'))
     real_authorize=a.authorize
-    monkeypatch.setattr(a,'authorize',lambda *args:real_authorize(*args,platform='linux'))
+    monkeypatch.setattr(a,'authorize',lambda *args,**kwargs:real_authorize(*args,platform='linux',**kwargs))
     monkeypatch.setattr(a.importlib.metadata,'version',lambda _: '0.7.4')
     monkeypatch.setattr(a.os,'umask',lambda _:0)
     monkeypatch.setattr(a.logging,'disable',lambda _:None)
@@ -407,3 +411,184 @@ def test_expiry_during_github_reads_is_rejected(monkeypatch,offline_github):
         fromisoformat=staticmethod(datetime.fromisoformat)
     monkeypatch.setattr(a,'datetime',Clock)
     with pytest.raises(ValueError,match='EXPIRED_DURING_VERIFICATION'): permit()
+
+
+def evidence_for(directory):
+    return Path(a.state(directory)['evidence'])
+
+
+def timeline(evidence):
+    return [json.loads(row) for row in (evidence/'timeline.jsonl').read_text().splitlines()]
+
+
+def test_durable_evidence_survives_temp_loss_and_excludes_secrets(tmp_path):
+    import shutil, hashlib
+    directory=tmp_path/'disposable';cli=FakeCLI(directory)
+    result=a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    evidence=evidence_for(directory)
+    secret=a.state(directory)['name']
+    shutil.rmtree(directory)
+    saved=json.loads((evidence/'summary.json').read_text())
+    assert saved['outcome']=='TPU_PROBE_PASS' and saved['TPU_PJRT']=='NOT VERIFIED' and saved['execution_mode']=='CPU_MOCK'
+    assert result['run_id']==evidence.name
+    content=''.join(p.read_text() for p in evidence.iterdir())
+    for canary in (secret,'owned-endpoint','unrelated','mock://','approval_ref','cli_python'):
+        assert canary not in content
+    manifest=json.loads((evidence/'manifest.json').read_text())
+    for name,entry in manifest.items():
+        assert hashlib.sha256((evidence/name).read_bytes()[:entry['bytes']]).hexdigest()==entry['sha256']
+    rows=timeline(evidence)
+    assert any(r['event']=='backend_release_verified' for r in rows)
+    assert all(set(('event','utc_ts','elapsed_monotonic_ms','stage','outcome','error_class',
+                   'deadline_remaining_ms','origin_sha','run_id'))<=r.keys() for r in rows)
+    if os.name=='posix':
+        assert evidence.stat().st_mode & 0o777==0o700
+        assert all(p.stat().st_mode & 0o777==0o600 for p in evidence.iterdir())
+
+
+@pytest.mark.parametrize('failure',['timeout','interrupt'])
+def test_partial_output_metadata_never_persists_canaries(tmp_path,failure):
+    directory=tmp_path/'partial';cli=FakeCLI(directory)
+    a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    evidence=evidence_for(directory)
+    secret=b'Authorization: Bearer CANARY_TOKEN https://proxy.invalid/?token=CANARY'
+    def runner(argv,**kwargs):
+        assert 30 < kwargs['timeout'] <= 180
+        assert kwargs['shell'] is False
+        if failure=='interrupt': raise KeyboardInterrupt('CANARY_TOKEN')
+        raise subprocess.TimeoutExpired(argv,kwargs['timeout'],output=secret,stderr=secret)
+    with pytest.raises((subprocess.TimeoutExpired,KeyboardInterrupt)): a.CLI(directory,runner).call('probe')
+    row=timeline(evidence)[-1]
+    assert row['event']=='subprocess_interrupted' and row['stage']=='probe'
+    if failure=='timeout': assert row['stdout_bytes']==row['stderr_bytes']==len(secret)
+    assert 'CANARY' not in ''.join(p.read_text() for p in evidence.iterdir())
+
+
+def test_lost_runtime_journal_reports_manual_attention(tmp_path):
+    import shutil
+    directory=tmp_path/'lost';cli=FakeCLI(directory)
+    original=cli.call
+    def call(op):
+        if op=='probe':
+            shutil.rmtree(directory)
+            raise subprocess.TimeoutExpired('MOCK',1)
+        return original(op)
+    cli.call=call
+    result=a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    assert result['cleanup']['status']=='CLEANUP_FAILED'
+    assert result['cleanup']['attention']=='MANUAL_ATTENTION_REQUIRED'
+    assert not directory.exists()
+    saved=json.loads((a.EVIDENCE_ROOT/result['run_id']/'summary.json').read_text())
+    assert saved['TPU_PJRT']=='NOT VERIFIED'
+    assert not any(r['event']=='backend_release_verified' for r in timeline(a.EVIDENCE_ROOT/result['run_id']))
+
+
+@pytest.mark.parametrize('slow_stage,delay,expected',[
+    ('github',10,'PASS'),('startup',40,'PASS'),('import',40,'PASS'),
+    ('lookup',40,'PASS'),('remote',121,'TIMEOUT'),('remaining',5,'TIMEOUT')])
+def test_injected_stage_delays_and_remote_budget(tmp_path,monkeypatch,offline_github,slow_stage,delay,expected):
+    import types, contextlib, io, builtins
+    # Reuse the fully fake official CLI fixture: no installed Colab or network.
+    test_bridge_exact_dispatch_auth_guard_and_no_double_allocate(tmp_path,monkeypatch)
+    directory=tmp_path/'bridge';evidence=evidence_for(directory)
+    clock=SimpleNamespace(value=time.monotonic())
+    monkeypatch.setattr(a.time,'monotonic',lambda:clock.value)
+    read=a.github_json
+    def github(url):
+        if slow_stage=='github': clock.value+=delay
+        return read(url)
+    monkeypatch.setattr(a,'github_json',github)
+    common=sys.modules['colab_cli.common']
+    def lookup(*args,**kwargs):
+        if slow_stage=='lookup': clock.value+=delay
+        return SimpleNamespace()
+    common.state=SimpleNamespace(get_session=lookup)
+    runtime=types.ModuleType('colab_cli.runtime');executions=[]
+    class Runtime:
+        def execute_code(self,code,**kwargs):
+            executions.append(kwargs['timeout'])
+            cost=delay if slow_stage=='remote' else 2
+            clock.value+=min(cost,kwargs['timeout'])
+            if cost>kwargs['timeout']: raise TimeoutError('CANARY_REMOTE_ERROR')
+    runtime.ColabRuntime=Runtime
+    monkeypatch.setitem(sys.modules,'colab_cli.runtime',runtime)
+    def main():
+        common.state.get_session('CANARY_SESSION')
+        Runtime().execute_code('TORCHYAND_TPU_PROBE:')
+    sys.modules['colab_cli.cli'].main=main
+    importing=builtins.__import__;seen_import=False
+    def imported(name,*args,**kwargs):
+        nonlocal seen_import
+        if name=='colab_cli.auth' and slow_stage=='import' and not seen_import:
+            seen_import=True;clock.value+=delay
+        return importing(name,*args,**kwargs)
+    monkeypatch.setattr(builtins,'__import__',imported)
+    if slow_stage=='remaining':
+        data=a.state(directory);data['deadline']=clock.value+data['cleanup_reserve']+delay;a.save(directory,data)
+    started=clock.value
+    def runner(argv,**kwargs):
+        if slow_stage=='startup': clock.value+=delay
+        with contextlib.redirect_stdout(io.StringIO()): a.bridge(directory,'probe',float(argv[-1]))
+        return subprocess.CompletedProcess(argv,0,'MOCK_RESULT','')
+    if expected=='PASS':
+        assert a.CLI(directory,runner).call('probe')=='MOCK_RESULT'
+        assert clock.value-started>30  # Each case would exceed the old host cutoff.
+        assert executions and 0<executions[0]<=120
+    else:
+        with pytest.raises(TimeoutError): a.CLI(directory,runner).call('probe')
+        if slow_stage=='remaining': assert executions==[]
+    rows=timeline(evidence)
+    assert any(r['stage']=='github_approval' for r in rows)
+    assert not any('CANARY' in json.dumps(r) for r in rows)
+
+
+def test_parent_death_persists_terminal_evidence(tmp_path,monkeypatch):
+    directory=tmp_path/'worker-death';cli=FakeCLI(directory)
+    a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    evidence=evidence_for(directory)
+    monkeypatch.setattr(a.guard,'wait_for_trigger',lambda *args:'PARENT_TERMINATED')
+    assert a.watch(directory,cli)==0
+    assert json.loads((evidence/'summary.json').read_text())['outcome']=='WORKER_LOST'
+
+
+def test_no_probe_budget_leaves_cleanup_reserve(tmp_path):
+    directory=tmp_path/'budget';cli=FakeCLI(directory)
+    a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    data=a.state(directory);data['deadline']=time.monotonic()+data['cleanup_reserve']-.1;a.save(directory,data)
+    def veto(*args,**kwargs): pytest.fail('No process when reserve reached')
+    with pytest.raises(TimeoutError): a.CLI(directory,veto).call('probe')
+
+
+def test_lost_diagnostics_cannot_prevent_owned_cleanup(tmp_path):
+    import shutil
+    directory=tmp_path/'diagnostics-loss';cli=FakeCLI(directory);original=cli.call
+    def call(op):
+        if op=='probe':
+            shutil.rmtree(evidence_for(directory))
+            raise subprocess.TimeoutExpired('MOCK',1)
+        return original(op)
+    cli.call=call
+    result=a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    assert result['cleanup']['status']=='RELEASED'
+    assert result['evidence_status']=='WRITE_FAILED' and cli.calls.count('stop')==1
+
+
+def test_result_parse_stage_has_its_own_elapsed_time(tmp_path,monkeypatch):
+    clock=SimpleNamespace(value=time.monotonic())
+    monkeypatch.setattr(a.time,'monotonic',lambda:clock.value)
+    loads=a.json.loads
+    def parse(value,*args,**kwargs):
+        if isinstance(value,str) and value.startswith('{"nonce"'): clock.value+=17
+        return loads(value,*args,**kwargs)
+    monkeypatch.setattr(a.json,'loads',parse)
+    directory=tmp_path/'parse';cli=FakeCLI(directory)
+    a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    rows=[r for r in timeline(evidence_for(directory)) if r['stage']=='result_parse']
+    assert rows[-1]['elapsed_monotonic_ms']-rows[-2]['elapsed_monotonic_ms']==17000
+
+
+def test_nonfinite_probe_deadline_cannot_bypass_budget(tmp_path,monkeypatch):
+    test_bridge_exact_dispatch_auth_guard_and_no_double_allocate(tmp_path,monkeypatch)
+    for deadline in (None,float('inf'),float('nan')):
+        with pytest.raises(ValueError,match='FINITE_PROBE_HOST_DEADLINE'):
+            a.bridge(tmp_path/'bridge','probe',deadline)

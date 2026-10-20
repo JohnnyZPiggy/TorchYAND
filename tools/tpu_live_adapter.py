@@ -6,9 +6,11 @@ from dataclasses import dataclass, asdict
 import argparse
 import builtins
 from datetime import datetime, timezone
+import hashlib
 import importlib.metadata
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -28,6 +30,7 @@ CHILD = ('import sys;sys.path.insert(0,sys.argv[1]);from tools import tpu_live_a
 REFERENCE = r'https://github\.com/JohnnyZPiggy/TorchYAND/issues/7#issuecomment-[0-9]+'
 API = 'https://api.github.com/repos/JohnnyZPiggy/TorchYAND'
 SCIENTIST_ID = 158853624
+EVIDENCE_ROOT = Path.home()/'.local/state/torchyand/probes'
 EMPTY = '[colab] No active sessions found on server.'
 PROBE = '''import json, os, sys
 os.environ['PJRT_DEVICE'] = 'TPU'
@@ -68,6 +71,72 @@ class Permit:
     seconds: int = 300
 
 
+def new_evidence(sha, seconds):
+    root = EVIDENCE_ROOT.resolve()
+    if root.is_relative_to(ROOT.resolve()) or any(x.lower() in ('dropbox', 'onedrive') for x in root.parts):
+        raise ValueError('UNSYNCED_EVIDENCE_REQUIRED')
+    root.mkdir(parents=True, exist_ok=True); root.chmod(0o700)
+    path = root/uuid.uuid4().hex
+    path.mkdir(mode=0o700)
+    guard.write_json(path/'context.json', dict(origin_sha=sha, run_id=path.name,
+                     started=time.monotonic(), deadline=time.monotonic()+seconds))
+    return path
+
+
+def event(evidence, stage, name, outcome='PENDING', error=None, stdout=None, stderr=None):
+    if evidence is None:
+        return
+    try:
+        evidence = Path(evidence)
+        context = json.loads((evidence/'context.json').read_text())
+        now = time.monotonic()
+        row = dict(event=name, utc_ts=datetime.now(timezone.utc).isoformat(),
+                   elapsed_monotonic_ms=round((now-context['started'])*1000), stage=stage,
+                   outcome=outcome, error_class=type(error).__name__ if error is not None else None,
+                   deadline_remaining_ms=max(0, round((context['deadline']-now)*1000)),
+                   origin_sha=context['origin_sha'], run_id=context['run_id'])
+        # Untrusted output contents/exception messages are never persisted.
+        for key, value in (('stdout_bytes', stdout), ('stderr_bytes', stderr)):
+            if value is not None:
+                row[key] = len(value if isinstance(value, bytes) else value.encode('utf-8'))
+        fd = os.open(evidence/'timeline.jsonl', os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600)
+        try:
+            os.write(fd, (json.dumps(row)+'\n').encode()); os.fsync(fd)
+        finally:
+            os.close(fd)
+        return True
+    except (OSError, ValueError, KeyError):
+        return False  # Lost diagnostics must never disable owned-session cleanup.
+
+
+def timed(evidence, stage, function, *args, **kwargs):
+    event(evidence, stage, 'start')
+    try:
+        value = function(*args, **kwargs)
+    except SystemExit as error:
+        event(evidence, stage, 'finish' if error.code in (None, 0) else 'error',
+              'PASS' if error.code in (None, 0) else 'FAILED', None if error.code in (None, 0) else error)
+        raise
+    except BaseException as error:
+        event(evidence, stage, 'error', 'FAILED', error)
+        raise
+    event(evidence, stage, 'finish', 'PASS')
+    return value
+
+
+def finish_evidence(evidence, result):
+    safe = dict(result, TPU_PJRT='VERIFIED' if result['outcome']=='TPU_PROBE_PASS'
+                and result.get('execution_mode')=='LIVE' else 'NOT VERIFIED')
+    guard.write_json(evidence/'summary.json', safe)
+    event(evidence, 'lifecycle', 'terminal', result['outcome'])
+    manifest = {}
+    for name in ('context.json', 'timeline.jsonl', 'summary.json'):
+        payload = (evidence/name).read_bytes()
+        manifest[name] = dict(sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload))
+    # A dying worker's child may append later: seal the exact observed prefix.
+    guard.write_json(evidence/'manifest.json', manifest)
+
+
 def validate_record(record, instruction, sha, merged_sha, dirty, cli_python, platform=sys.platform):
     if (not isinstance(record, dict) or record.get('source_sha') != sha or sha != merged_sha or dirty
             or not isinstance(sha, str) or not re.fullmatch(r'[0-9a-f]{40}', sha)
@@ -100,9 +169,9 @@ def github_json(url):
         return json.loads(raw)
 
 
-def authorize(record, instruction, sha, merged_sha, dirty, cli_python, platform=sys.platform):
+def authorize(record, instruction, sha, merged_sha, dirty, cli_python, platform=sys.platform, evidence=None):
     permit = validate_record(record, instruction, sha, merged_sha, dirty, cli_python, platform)
-    remote = github_json(API + '/git/ref/heads/main')
+    remote = timed(evidence, 'github_main', github_json, API + '/git/ref/heads/main')
     if (remote.get('ref') != 'refs/heads/main' or remote.get('object', {}).get('type') != 'commit'
             or remote['object'].get('sha') != sha):
         raise ValueError('LIVE_REMOTE_MAIN_MISMATCH')
@@ -113,7 +182,8 @@ def authorize(record, instruction, sha, merged_sha, dirty, cli_python, platform=
     for reference, kind in ((permit.approval_ref, 'TPU_RESOURCE_APPROVAL'),
                             (instruction, 'TPU_SMOKE_EXECUTION')):
         comment_id = int(reference.rsplit('-', 1)[1])
-        comment = github_json(API + '/issues/comments/' + str(comment_id))
+        comment = timed(evidence, 'github_approval' if kind=='TPU_RESOURCE_APPROVAL' else 'github_instruction',
+                        github_json, API + '/issues/comments/' + str(comment_id))
         user = comment.get('user', {})
         if (type(comment.get('id')) is not int or comment['id'] != comment_id
                 or comment.get('html_url') != reference or comment.get('issue_url') != API + '/issues/7'
@@ -190,16 +260,30 @@ class CLI:
             remaining -= data['cleanup_reserve']
         if remaining <= 0:
             raise TimeoutError('LOCAL_DEADLINE')
-        reply = self.runner([data['permit']['cli_python'], '-c', CHILD, str(ROOT),
-                             'bridge', str(self.directory), operation], shell=False,
-                            stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                            timeout=min(180 if operation == 'allocate' else 30, remaining))
+        evidence = data.get('evidence')
+        limit = min(180 if operation in ('allocate', 'probe') else 30, remaining)
+        argv = [data['permit']['cli_python'], '-c', CHILD, str(ROOT), 'bridge', str(self.directory), operation]
+        if operation == 'probe':
+            argv.append(str(time.monotonic()+limit))
+        recorded = event(evidence, operation, 'parent_child_handoff')
+        if evidence and not recorded and operation in ('allocate', 'probe'):
+            raise OSError('DURABLE_EVIDENCE_UNAVAILABLE')
+        try:
+            reply = self.runner(argv, shell=False, stdin=subprocess.DEVNULL, capture_output=True,
+                                text=True, timeout=limit)
+        except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+            event(evidence, operation, 'subprocess_interrupted', 'FAILED', error,
+                  getattr(error, 'stdout', None), getattr(error, 'stderr', None))
+            raise
+        event(evidence, operation, 'subprocess_return', 'PASS' if not reply.returncode else 'FAILED',
+              stdout=reply.stdout, stderr=reply.stderr)
         if reply.returncode or reply.stderr.strip():
             raise RuntimeError('CLI_FAILED_PRIVATE_DIAGNOSTICS_REQUIRED')
         return reply.stdout
 
 
-def bridge(directory, operation):
+
+def bridge(directory, operation, probe_deadline=None):
     """No direct HTTP: guarded official v0.7.4 CLI main, per-run private config."""
     data = state(directory)
     permit = Permit(**data['permit'])
@@ -208,15 +292,22 @@ def bridge(directory, operation):
     if validate_record(record, permit.instruction_ref, permit.source_sha, permit.source_sha, False,
                        permit.cli_python) != permit or time.monotonic() >= data['deadline']:
         raise ValueError('CHILD_PERMIT_INVALID')
+    evidence = data.get('evidence')
+    recorded = event(evidence, operation, 'child_enter')
+    if evidence and not recorded and operation in ('allocate', 'probe'):
+        raise OSError('DURABLE_EVIDENCE_UNAVAILABLE')
     name = data['name']
     arguments = {'version': ['version'], 'sessions': ['sessions'],
                  'allocate': ['new', '-s', name, '--tpu', 'v5e1'],
-                 'probe': ['exec', '-s', name, '--file', str(directory/'tiny_probe.py'), '--timeout', '30'] ,
+                 'probe': ['exec', '-s', name, '--file', str(directory/'tiny_probe.py'), '--timeout', '120'],
                  'stop': ['stop', '-s', name]}
     if operation not in arguments:
         raise ValueError('COMMAND_NOT_ALLOWLISTED')
     if operation in ('allocate', 'probe'):
-        authorize(record, permit.instruction_ref, permit.source_sha, permit.source_sha, False, permit.cli_python)
+        timed(evidence, 'authorization', lambda: authorize(record, permit.instruction_ref,
+              permit.source_sha, permit.source_sha, False, permit.cli_python, evidence=evidence))
+    if operation == 'probe' and (probe_deadline is None or not math.isfinite(probe_deadline)):
+        raise ValueError('FINITE_PROBE_HOST_DEADLINE_REQUIRED')
     if operation == 'allocate':
         if data['phase'] != 'NAMED_ALLOCATION_PENDING' or not (directory/'watch-ready').exists():
             raise ValueError('WATCHDOG_OR_PENDING_JOURNAL_MISSING')
@@ -230,10 +321,13 @@ def bridge(directory, operation):
             stream.write('one stop only\n'); stream.flush(); os.fsync(stream.fileno())
     if importlib.metadata.version('google-colab-cli') != '0.7.4':
         raise ValueError('CLI_VERSION_MISMATCH')
-    import colab_cli.auth as auth
-    import colab_cli.common as common
-    from colab_cli import auto_update
-    from colab_cli.cli import main as cli_main
+    def load_cli():
+        import colab_cli.auth as auth
+        import colab_cli.common as common
+        from colab_cli import auto_update
+        from colab_cli.cli import main as cli_main
+        return auth, common, auto_update, cli_main
+    auth, common, auto_update, cli_main = timed(evidence, 'cli_import', load_cli)
     def no_interaction(*args, **kwargs):
         raise RuntimeError('INTERACTIVE_AUTH_DISABLED')
     auth._run_remote_flow = no_interaction
@@ -249,8 +343,22 @@ def bridge(directory, operation):
     auto_update.run_background_check = lambda: None
     logging.disable(logging.CRITICAL)  # Upstream debug logging can include HTTP headers.
     os.umask(0o077)
+    if operation == 'probe':
+        from colab_cli.runtime import ColabRuntime
+        lookup = common.state.get_session
+        common.state.get_session = lambda *args, **kwargs: timed(evidence, 'session_lookup', lookup, *args, **kwargs)
+        execute = ColabRuntime.execute_code
+        def bounded_execute(runtime, code, *args, **kwargs):
+            remaining = min(probe_deadline, data['deadline']-data['cleanup_reserve'])-time.monotonic()-15
+            if remaining < 1:
+                raise TimeoutError('PROBE_BUDGET_EXHAUSTED')
+            kwargs['timeout'] = min(120, remaining, kwargs.get('timeout', 120))
+            stage = 'remote_exec' if 'TORCHYAND_TPU_PROBE:' in code else 'remote_setup'
+            return timed(evidence, stage, execute, runtime, code, *args, **kwargs)
+        ColabRuntime.execute_code = bounded_execute
+        arguments['probe'][-1] = '120'
     sys.argv = ['colab', '--config', str(directory/'cli-sessions.json'), '--auth', 'oauth2', *arguments[operation]]
-    cli_main()
+    timed(evidence, 'cli_dispatch', cli_main)
     return 0
 
 
@@ -261,7 +369,8 @@ def discover(data, rows):
     return matches[0]
 
 
-def release(directory, cli, trigger):
+def release(directory, cli, trigger, evidence=None):
+    event(evidence, 'cleanup', 'start')
     result = dict(status='CLEANUP_FAILED', attention='MANUAL_ATTENTION_REQUIRED', trigger=trigger)
     try:
         data = state(directory)
@@ -283,18 +392,26 @@ def release(directory, cli, trigger):
             if any(r['endpoint'] == endpoint for r in sessions(cli.call('sessions'))):
                 raise RuntimeError('ENDPOINT_STILL_PRESENT')
         data['phase'] = 'RELEASED'; save(directory, data)
+        event(evidence, 'cleanup', 'backend_release_verified', 'PASS')
         result.update(status='RELEASED', attention='NONE')
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, TimeoutError, subprocess.TimeoutExpired) as error:
         result['error'] = type(error).__name__
-    guard.write_json(directory/'release.json', result)
+    event(evidence, 'cleanup', 'finish', result['status'])
+    if directory.exists():
+        guard.write_json(directory/'release.json', result)
     return result
 
 
 def watch(directory, cli=None):
     data = state(directory)
+    evidence = data.get('evidence')
     (directory/'watch-ready').touch()
+    event(evidence, 'watchdog', 'ready', 'PASS')
     reason = guard.wait_for_trigger(directory, data['deadline'], data['cleanup_reserve'], data['parent'], 300)
-    result = release(directory, CLI(directory) if cli is None else cli, reason)
+    result = release(directory, CLI(directory) if cli is None else cli, reason, evidence)
+    if reason == 'PARENT_TERMINATED' and evidence:
+        finish_evidence(Path(evidence), dict(outcome='WORKER_LOST', cleanup=result, error='ParentTerminated',
+                        source_sha=data['permit']['source_sha'], execution_mode=data.get('execution_mode', 'UNKNOWN')))
     return 0 if result['status'] == 'RELEASED' else 1
 
 
@@ -304,16 +421,19 @@ def start_watch(directory):
 
 
 def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
+    evidence = new_evidence(permit.source_sha, permit.seconds)
+    event(evidence, 'lifecycle', 'parent_start')
     if authorize(record, permit.instruction_ref, permit.source_sha, permit.source_sha, False,
-                 permit.cli_python, platform='linux') != permit:
+                 permit.cli_python, platform='linux', evidence=evidence) != permit:
         raise ValueError('PERMIT_RECORD_MISMATCH')
     if not directory.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
         raise ValueError('PRIVATE_OS_TEMP_DIRECTORY_REQUIRED')
     directory.mkdir(parents=True, exist_ok=False); directory.chmod(0o700)
     os.umask(0o077) if os.name == 'posix' else None
-    started = time.monotonic()
-    data = dict(schema=1, permit=asdict(permit), name='torchyand-live-'+uuid.uuid4().hex,
-                started_utc=datetime.now(timezone.utc).isoformat(), deadline=started+permit.seconds,
+    mode = 'LIVE' if cli_factory is CLI and watch_factory is start_watch else 'CPU_MOCK'
+    started = json.loads((evidence/'context.json').read_text())['started']
+    data = dict(schema=1, execution_mode=mode, permit=asdict(permit), name='torchyand-live-'+uuid.uuid4().hex,
+                started_utc=datetime.now(timezone.utc).isoformat(), deadline=started+permit.seconds, evidence=str(evidence),
                 cleanup_reserve=min(60, permit.seconds*.25), parent=os.getpid(),
                 before=[], endpoint=None, phase='PRECHECK')
     save(directory, data); guard.write_json(directory/'resource-approval.json', record)
@@ -335,7 +455,7 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
             raise RuntimeError('WATCHDOG_DIED_BEFORE_ALLOCATION')
         outcome = 'ALLOCATION_UNCERTAIN'
         cli.call('allocate')
-        row = discover(data, sessions(cli.call('sessions')))
+        row = timed(evidence, 'session_discovery', discover, data, sessions(cli.call('sessions')))
         data.update(endpoint=row['endpoint'], phase='ALLOCATED'); save(directory, data)
         outcome = 'DEVICE_OR_PROBE_BLOCKED'
         if row['hardware'] != 'V5E1' or row['variant'] != 'TPU':
@@ -347,7 +467,7 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
                    if line.startswith('TORCHYAND_TPU_PROBE:')]
         if len(markers) != 1:
             raise ValueError('NO_UNIQUE_PROBE_EVIDENCE')
-        probe = json.loads(markers[0])
+        probe = timed(evidence, 'result_parse', json.loads, markers[0])
         if (probe.get('nonce') != data['name'] or probe.get('status') != 'PASS'
                 or probe.get('PJRT') != 'TPU' or probe.get('result') != [[3.], [7.]]
                 or not probe.get('real_devices') or any(not x.startswith('TPU:') for x in probe['real_devices'])):
@@ -356,10 +476,12 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
         outcome = 'TPU_PROBE_PASS'
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, TimeoutError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
         error_kind = type(error).__name__
+        event(evidence, 'lifecycle', 'worker_error', 'FAILED', error)
     finally:
         cleanup = dict(status='NOT_NEEDED', attention='NONE')
         if guardian is not None:
-            (directory/'done').touch()
+            if directory.exists():
+                (directory/'done').touch()
             try:
                 guardian.wait(timeout=max(.1, data['deadline']-time.monotonic()))
             except subprocess.TimeoutExpired:
@@ -367,17 +489,22 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
             if (directory/'release.json').exists():
                 cleanup = json.loads((directory/'release.json').read_text())
             else:
-                cleanup = release(directory, cli, 'WATCHDOG_UNAVAILABLE')
+                cleanup = release(directory, cli, 'WATCHDOG_UNAVAILABLE', evidence)
                 outcome, error_kind = 'WATCHDOG_FAILED', 'IndependentCleanupUnavailable'
-        result = dict(outcome=outcome, cleanup=cleanup, error=error_kind, source_sha=permit.source_sha,
+        result = dict(outcome=outcome, cleanup=cleanup, error=error_kind, source_sha=permit.source_sha, run_id=evidence.name, execution_mode=mode,
                       XLA_COMPILE='NOT BENCHMARKED', ACTUAL_CU='NOT MEASURED', HARD_STOP_GUARANTEE='NOT_PROVEN')
-        guard.write_json(directory/'summary.json', result)
+        try:
+            finish_evidence(evidence, result)
+        except OSError:
+            result['evidence_status'] = 'WRITE_FAILED'
+        if directory.exists():
+            guard.write_json(directory/'summary.json', result)
     return result
 
 
 def child(argv):
-    if len(argv) == 3 and argv[0] == 'bridge':
-        return bridge(Path(argv[1]), argv[2])
+    if len(argv) in (3, 4) and argv[0] == 'bridge':
+        return bridge(Path(argv[1]), argv[2], float(argv[3]) if len(argv)==4 else None)
     if len(argv) == 2 and argv[0] == 'watch':
         return watch(Path(argv[1]))
     return 2
