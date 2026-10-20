@@ -621,7 +621,7 @@ def test_source_bound_long_runtime_and_transport(tmp_path,monkeypatch,offline_gi
     assert cli.calls.count('allocate')==cli.calls.count('stop')==1
 
 
-@pytest.mark.parametrize('defect',['bootstrap-failed','nonce','absent','bad-timings'])
+@pytest.mark.parametrize('defect',['bootstrap-failed','nonce','absent','bad-timings','bad-failure','failure-stage','failure-category'])
 def test_bootstrap_failure_releases_owned_session(tmp_path,monkeypatch,offline_github,defect):
     data=record();data.update(isolated_cp312=True)
     for n in (1,2):
@@ -634,12 +634,49 @@ def test_bootstrap_failure_releases_owned_session(tmp_path,monkeypatch,offline_g
         payload=dict(nonce=a.state(directory)['name'],status='BLOCKED',stage='preflight',reason='PYTHON312_UNAVAILABLE',error_class='FileNotFoundError')
         if defect=='nonce':payload['nonce']='foreign'
         if defect=='bad-timings':payload['timings']=[]
+        if defect.startswith('failure') or defect=='bad-failure':
+            payload['command_failure']=dict(stage='preflight',returncode=23,output_bytes=5,inspected_bytes=5,category='UNKNOWN')
+            if defect=='bad-failure':payload['command_failure']['returncode']=True
+            if defect=='failure-stage':payload['command_failure']['stage']='install'
+            if defect=='failure-category':payload['command_failure']['category']='Bearer CANARY_TOKEN'
         return '' if defect=='absent' else 'TORCHYAND_BOOTSTRAP:'+json.dumps(payload)
     cli.call=call
     result=a.run(allowed,data,directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
     assert result['outcome']=='DEVICE_OR_PROBE_BLOCKED' and result['cleanup']['status']=='RELEASED'
     if defect=='bootstrap-failed':assert result['bootstrap']['reason']=='PYTHON312_UNAVAILABLE'
     assert cli.calls.count('stop')==1
+    assert 'CANARY' not in ''.join(p.read_text() for p in evidence_for(directory).iterdir())
+
+
+@pytest.mark.parametrize('minutes',[5,60])
+@pytest.mark.parametrize('category',['DEPENDENCY_CONFLICT','UNKNOWN'])
+def test_pip_failure_is_durable_before_owned_release(tmp_path,monkeypatch,offline_github,minutes,category):
+    resource=record();resource.update(max_minutes=minutes,isolated_cp312=True)
+    for n in (1,2):
+        comment=offline_github[a.API+'/issues/comments/'+str(n)]
+        body=json.loads(comment['body']);body.update(max_minutes=minutes,isolated_cp312=True);comment['body']=json.dumps(body)
+    allowed=a.authorize(resource,INSTRUCTION,SHA,SHA,False,str(Path(sys.executable).resolve()),platform='linux')
+    directory=tmp_path/'pip-failed';cli=FakeCLI(directory);original=cli.call
+    diagnostic=dict(stage='install',returncode=23,output_bytes=150,inspected_bytes=150,category=category)
+    def call(op):
+        if op!='probe':return original(op)
+        payload=dict(nonce=a.state(directory)['name'],status='BLOCKED',stage='install',reason='COMMAND_FAILED',
+                     command_failure=dict(diagnostic,raw='Bearer CANARY_TOKEN /private/path https://CANARY.invalid'))
+        return 'TORCHYAND_BOOTSTRAP:'+json.dumps(payload)
+    cli.call=call
+    class OrderedWatch(FakeWatch):
+        def wait(self,timeout):
+            assert json.loads((evidence_for(directory)/'bootstrap.json').read_text())['command_failure']==diagnostic
+            return super().wait(timeout)
+    result=a.run(allowed,resource,directory,cli_factory=lambda _:cli,watch_factory=lambda d:OrderedWatch(d,cli))
+    assert result['bootstrap']['command_failure']==diagnostic
+    assert result['cleanup']['status']=='RELEASED' and cli.calls.count('stop')==1
+    evidence=evidence_for(directory)
+    contents=''.join(p.read_text() for p in evidence.iterdir())
+    assert 'CANARY' not in contents and '/private/path' not in contents and 'Bearer' not in contents
+    manifest=json.loads((evidence/'manifest.json').read_text());assert 'bootstrap.json' in manifest
+    rows=timeline(evidence)
+    assert next(i for i,r in enumerate(rows) if r['event']=='diagnostic_persisted') < next(i for i,r in enumerate(rows) if r['stage']=='cleanup')
 
 
 def test_real_watch_process_handles_dead_parent_with_long_horizon(tmp_path):

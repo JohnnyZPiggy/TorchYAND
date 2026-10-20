@@ -22,6 +22,42 @@ import zipfile
 TOTAL_BYTES = 452635819
 HOSTS = {'files.pythonhosted.org', 'download-r2.pytorch.org'}
 STAGES = ('preflight', 'venv', 'pip_target', 'download', 'hash', 'install', 'pip_check', 'probe', 'complete')
+LOG_LIMIT = 1048576
+SCAN_LIMIT = 65536
+ERROR_CATEGORIES = ('NO_MATCHING_DISTRIBUTION', 'DEPENDENCY_CONFLICT', 'REQUIRES_PYTHON',
+                    'INVALID_WHEEL', 'INSTALL_PERMISSION', 'PIP_TARGET_ERROR', 'UNKNOWN')
+
+
+def command_failure(stage, returncode, log):
+    """Classify a bounded private tail; no substrings from the log are returned."""
+    log.seek(0, os.SEEK_END)
+    size = log.tell()
+    log.seek(max(0, size-SCAN_LIMIT))
+    raw = log.read(SCAN_LIMIT)
+    text = raw.decode('utf-8', errors='replace').lower()
+    patterns = (
+        ('DEPENDENCY_CONFLICT', r'resolutionimpossible|conflicting dependencies'),
+        ('REQUIRES_PYTHON', r'requires a different python|requires-python|unsupportedpythonversion'),
+        ('NO_MATCHING_DISTRIBUTION', r'no matching distribution found'),
+        ('INVALID_WHEEL', r'invalidwheel|invalid wheel|wheel[^\n]*is invalid|inconsistent name|invalid metadata'),
+        ('INSTALL_PERMISSION', r'permissionerror|permission denied'),
+        ('PIP_TARGET_ERROR', r'could not find[^\n]*python interpreter|no such option: --python'),
+    )
+    category = next((name for name, pattern in patterns if re.search(pattern, text)), 'UNKNOWN')
+    return validate_failure(dict(stage=stage, returncode=returncode, output_bytes=size,
+                                 inspected_bytes=len(raw), category=category))
+
+
+def validate_failure(value):
+    """Independent host-side projection of an untrusted nonce-bound diagnostic."""
+    if (not isinstance(value, dict) or value.get('stage') not in STAGES[:-1]
+            or type(value.get('returncode')) is not int or not -(2**31) <= value['returncode'] < 2**31
+            or value['returncode'] == 0 or value.get('category') not in ERROR_CATEGORIES
+            or type(value.get('output_bytes')) is not int or not 0 <= value['output_bytes'] <= LOG_LIMIT
+            or type(value.get('inspected_bytes')) is not int
+            or not 0 <= value['inspected_bytes'] <= min(value['output_bytes'], SCAN_LIMIT)):
+        raise ValueError('INVALID_COMMAND_FAILURE_DIAGNOSTIC')
+    return {key: value[key] for key in ('stage', 'returncode', 'output_bytes', 'inspected_bytes', 'category')}
 PREFLIGHT_ERRORS = ('PYTHON_NOT_312', 'ABI_MISMATCH', 'FREE_THREADED_UNSUPPORTED', 'PLATFORM_MISMATCH',
                     'VENV_MISSING', 'SPACE_INSUFFICIENT')
 REASONS = PREFLIGHT_ERRORS+('PYTHON312_UNAVAILABLE', 'PIP_22_3_REQUIRED', 'PIP_PYTHON_OPTION_MISSING',
@@ -144,15 +180,20 @@ def run(manifest, probe, nonce, seconds):
     def command(argv):
         # Bound private stdout+stderr on disk; no raw package/HTTP output escapes.
         import resource
-        def cap(): resource.setrlimit(resource.RLIMIT_FSIZE, (1048576, 1048576))
+        def cap(): resource.setrlimit(resource.RLIMIT_FSIZE, (LOG_LIMIT, LOG_LIMIT))
         with tempfile.TemporaryFile(dir=root) as log:
             child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                      start_new_session=True, preexec_fn=cap)
             try:
                 code = child.wait(timeout=remaining())
             except BaseException:
-                os.killpg(child.pid, signal.SIGKILL); child.wait(); raise
+                os.killpg(child.pid, signal.SIGKILL)
+                code = child.wait()
+                if code:
+                    report['command_failure'] = command_failure(report['stage'], code, log)
+                raise
             if code:
+                report['command_failure'] = command_failure(report['stage'], code, log)
                 log.seek(0)
                 failure = log.read(65536).decode('utf-8', errors='replace')
                 for reason in PREFLIGHT_ERRORS:
