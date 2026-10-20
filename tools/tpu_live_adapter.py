@@ -32,6 +32,8 @@ API = 'https://api.github.com/repos/JohnnyZPiggy/TorchYAND'
 SCIENTIST_ID = 158853624
 EVIDENCE_ROOT = Path.home()/'.local/state/torchyand/probes'
 EMPTY = '[colab] No active sessions found on server.'
+MAX_MINUTES = 24*60  # Configuration guard, not a provider availability promise.
+RETURN_MARGIN = 15
 PROBE_STAGES = ('import_torch', 'import_torch_xla', 'import_torch_xla_runtime', 'versions',
                 'pjrt', 'device', 'matmul', 'sync', 'result', 'complete')
 PROBE_ERRORS = ('ModuleNotFoundError', 'ImportError', 'RuntimeError', 'ValueError', 'TypeError',
@@ -103,6 +105,7 @@ class Permit:
     cli_python: str
     device: str = 'v5e1'
     seconds: int = 300
+    isolated_cp312: bool = False
 
 
 def new_evidence(sha, seconds):
@@ -178,7 +181,8 @@ def validate_record(record, instruction, sha, merged_sha, dirty, cli_python, pla
             or not isinstance(sha, str) or not re.fullmatch(r'[0-9a-f]{40}', sha)
             or record.get('device') != 'v5e1' or type(record.get('max_sessions')) is not int
             or record['max_sessions'] != 1 or type(record.get('max_minutes')) is not int
-            or not 1 <= record['max_minutes'] <= 5 or record.get('zero_retries') is not True
+            or not 1 <= record['max_minutes'] <= MAX_MINUTES or record.get('zero_retries') is not True
+            or type(record.get('isolated_cp312', False)) is not bool
             or record.get('decision') != 'APPROVED' or record.get('supervised') is not True
             or record.get('residual_outage_risk_ack') is not True
             or record.get('quota_policy') != 'price_not_a_gate_no_purchase'
@@ -187,7 +191,8 @@ def validate_record(record, instruction, sha, merged_sha, dirty, cli_python, pla
         raise ValueError('SEPARATE_RESOURCE_AND_RUN_APPROVAL_REQUIRED')
     if platform not in ('linux', 'darwin') or not Path(cli_python).is_absolute():
         raise ValueError('USE_EXISTING_LINUX_WSL_OR_MACOS_CLI_PYTHON')
-    return Permit(sha, record['approval_ref'], instruction, str(cli_python), seconds=record['max_minutes']*60)
+    return Permit(sha, record['approval_ref'], instruction, str(cli_python), seconds=record['max_minutes']*60,
+                  isolated_cp312=record.get('isolated_cp312', False))
 
 
 def github_json(url):
@@ -297,7 +302,7 @@ class CLI:
         if remaining <= 0:
             raise TimeoutError('LOCAL_DEADLINE')
         evidence = data.get('evidence')
-        limit = min(180 if operation in ('allocate', 'probe') else 30, remaining)
+        limit = remaining if operation in ('allocate', 'probe') else min(30, remaining)
         argv = [data['permit']['cli_python'], '-c', CHILD, str(ROOT), 'bridge', str(self.directory), operation]
         if operation == 'probe':
             argv.append(str(time.monotonic()+limit))
@@ -336,7 +341,7 @@ def bridge(directory, operation, probe_deadline=None):
     name = data['name']
     arguments = {'version': ['version'], 'sessions': ['sessions'],
                  'allocate': ['new', '-s', name, '--tpu', 'v5e1'],
-                 'probe': ['exec', '-s', name, '--file', str(directory/'tiny_probe.py'), '--timeout', '120'],
+                 'probe': ['exec', '-s', name, '--file', str(directory/'tiny_probe.py'), '--timeout', '1'],
                  'stop': ['stop', '-s', name]}
     if operation not in arguments:
         raise ValueError('COMMAND_NOT_ALLOWLISTED')
@@ -386,14 +391,20 @@ def bridge(directory, operation, probe_deadline=None):
         common.state.get_session = lambda *args, **kwargs: timed(evidence, 'session_lookup', lookup, *args, **kwargs)
         execute = ColabRuntime.execute_code
         def bounded_execute(runtime, code, *args, **kwargs):
-            remaining = min(probe_deadline, data['deadline']-data['cleanup_reserve'])-time.monotonic()-15
+            remaining = min(probe_deadline, data['deadline']-data['cleanup_reserve'])-time.monotonic()-RETURN_MARGIN
             if remaining < 1:
                 raise TimeoutError('PROBE_BUDGET_EXHAUSTED')
-            kwargs['timeout'] = min(120, remaining, kwargs.get('timeout', 120))
+            kwargs['timeout'] = min(remaining, kwargs.get('timeout', remaining))
             stage = 'remote_exec' if 'TORCHYAND_TPU_PROBE:' in code else 'remote_setup'
             return timed(evidence, stage, execute, runtime, code, *args, **kwargs)
         ColabRuntime.execute_code = bounded_execute
-        arguments['probe'][-1] = '120'
+        available = min(probe_deadline, data['deadline']-data['cleanup_reserve'])-time.monotonic()-RETURN_MARGIN
+        if available < 1:
+            raise TimeoutError('PROBE_BUDGET_EXHAUSTED')
+        arguments['probe'][-1] = str(int(available))
+        if permit.isolated_cp312:
+            from tools.tpu_bootstrap import launcher
+            (directory/'tiny_probe.py').write_text(launcher(PROBE.replace('NONCE', repr(name)), name, available), encoding='utf-8')
     sys.argv = ['colab', '--config', str(directory/'cli-sessions.json'), '--auth', 'oauth2', *arguments[operation]]
     timed(evidence, 'cli_dispatch', cli_main)
     return 0
@@ -444,7 +455,7 @@ def watch(directory, cli=None):
     evidence = data.get('evidence')
     (directory/'watch-ready').touch()
     event(evidence, 'watchdog', 'ready', 'PASS')
-    reason = guard.wait_for_trigger(directory, data['deadline'], data['cleanup_reserve'], data['parent'], 300)
+    reason = guard.wait_for_trigger(directory, data['deadline'], data['cleanup_reserve'], data['parent'], data['permit']['seconds'])
     result = release(directory, CLI(directory) if cli is None else cli, reason, evidence)
     if reason == 'PARENT_TERMINATED' and evidence:
         finish_evidence(Path(evidence), dict(outcome='WORKER_LOST', cleanup=result, error='ParentTerminated',
@@ -454,7 +465,8 @@ def watch(directory, cli=None):
 
 def start_watch(directory):
     return subprocess.Popen([sys.executable, '-c', CHILD, str(ROOT), 'watch', str(directory)],
-                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
 
 
 def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
@@ -485,6 +497,7 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
     guardian = None
     outcome, error_kind = 'BLOCKED', None
     diagnostic = None
+    bootstrap = None
     try:
         if cli.call('version').strip() != 'Version: 0.7.4':
             raise ValueError('CLI_VERSION_MISMATCH')
@@ -507,6 +520,31 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
         if guardian.poll() is not None:
             raise RuntimeError('WATCHDOG_DIED_BEFORE_PROBE')
         output = cli.call('probe')
+        if permit.isolated_cp312:
+            from tools.tpu_bootstrap import STAGES, REASONS
+            records = [line.removeprefix('TORCHYAND_BOOTSTRAP:') for line in output.splitlines()
+                       if line.startswith('TORCHYAND_BOOTSTRAP:')]
+            if len(records) != 1:
+                raise ValueError('NO_UNIQUE_BOOTSTRAP_EVIDENCE')
+            report = json.loads(records[0])
+            if not isinstance(report, dict) or report.get('nonce') != data['name']:
+                raise ValueError('BOOTSTRAP_NONCE_MISMATCH')
+            bootstrap = dict(status='PASS' if report.get('status')=='PASS' else 'BLOCKED',
+                             stage=report.get('stage') if report.get('stage') in STAGES else 'UNKNOWN')
+            if report.get('error_class') in PROBE_ERRORS+('FileNotFoundError', 'TimeoutExpired', 'TimeoutError', 'HTTPError', 'URLError'):
+                bootstrap['error_class'] = report['error_class']
+            for key in ('bytes', 'verified_wheels', 'unpacked_bytes'):
+                if type(report.get(key)) is int and report[key] >= 0:
+                    bootstrap[key] = report[key]
+            if not isinstance(report.get('timings', {}), dict):
+                raise ValueError('INVALID_BOOTSTRAP_TIMINGS')
+            bootstrap['timings'] = {key: value for key, value in report.get('timings', {}).items()
+                                    if key in STAGES and type(value) in (int, float) and math.isfinite(value) and value >= 0}
+            reason = report.get('reason', '')
+            if reason in REASONS:
+                bootstrap['reason'] = reason
+            if bootstrap['status'] != 'PASS':
+                raise ValueError('ISOLATED_BOOTSTRAP_BLOCKED')
         markers = [line.removeprefix('TORCHYAND_TPU_PROBE:') for line in output.splitlines()
                    if line.startswith('TORCHYAND_TPU_PROBE:')]
         if len(markers) != 1:
@@ -542,6 +580,8 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
                       XLA_COMPILE='NOT BENCHMARKED', ACTUAL_CU='NOT MEASURED', HARD_STOP_GUARANTEE='NOT_PROVEN')
         if diagnostic is not None:
             result['probe_diagnostic'] = diagnostic
+        if bootstrap is not None:
+            result['bootstrap'] = bootstrap
         try:
             finish_evidence(evidence, result)
         except OSError:
@@ -570,7 +610,7 @@ def main(argv=None):
     if not args.live:
         if any((args.approval_file, args.instruction_ref, args.cli_python, args.output_dir)):
             parser.error('Live arguments require explicit --live; no commands executed')
-        print('DRY_RUN: one v5e1, <=5 minutes, no retries; separate approval and run instruction required; CU price is not a gate')
+        print('DRY_RUN: one v5e1, finite max_minutes from source-bound approval (default record: 5; e.g. 60), no retries; CU price is not a gate')
         return 0
     if not all((args.approval_file, args.instruction_ref, args.cli_python, args.output_dir)):
         parser.error('Missing separate resource approval / execution instruction / CLI interpreter / private directory')

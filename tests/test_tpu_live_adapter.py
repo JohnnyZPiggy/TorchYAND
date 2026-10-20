@@ -124,7 +124,7 @@ def test_lifecycle_with_realistic_cli_text_only(tmp_path, scenario, outcome, cle
 
 
 @pytest.mark.parametrize('field,value', [('device','V5E1'),('device','v6e1'),('device',''),
-    ('max_sessions',True),('max_sessions',2),('max_minutes',6),('max_minutes',0),
+    ('max_sessions',True),('max_sessions',2),('max_minutes',a.MAX_MINUTES+1),('max_minutes',0),
     ('zero_retries',False),('source_sha','main'),('decision','PENDING'),
     ('quota_policy','unlimited'),('residual_outage_risk_ack',False)])
 def test_resource_gate(field,value):
@@ -453,7 +453,7 @@ def test_partial_output_metadata_never_persists_canaries(tmp_path,failure):
     evidence=evidence_for(directory)
     secret=b'Authorization: Bearer CANARY_TOKEN https://proxy.invalid/?token=CANARY'
     def runner(argv,**kwargs):
-        assert 30 < kwargs['timeout'] <= 180
+        assert 30 < kwargs['timeout'] <= 240
         assert kwargs['shell'] is False
         if failure=='interrupt': raise KeyboardInterrupt('CANARY_TOKEN')
         raise subprocess.TimeoutExpired(argv,kwargs['timeout'],output=secret,stderr=secret)
@@ -485,7 +485,7 @@ def test_lost_runtime_journal_reports_manual_attention(tmp_path):
 
 @pytest.mark.parametrize('slow_stage,delay,expected',[
     ('github',10,'PASS'),('startup',40,'PASS'),('import',40,'PASS'),
-    ('lookup',40,'PASS'),('remote',121,'TIMEOUT'),('remaining',5,'TIMEOUT')])
+    ('lookup',40,'PASS'),('remote',226,'TIMEOUT'),('remaining',5,'TIMEOUT')])
 def test_injected_stage_delays_and_remote_budget(tmp_path,monkeypatch,offline_github,slow_stage,delay,expected):
     import types, contextlib, io, builtins
     # Reuse the fully fake official CLI fixture: no installed Colab or network.
@@ -533,7 +533,7 @@ def test_injected_stage_delays_and_remote_budget(tmp_path,monkeypatch,offline_gi
     if expected=='PASS':
         assert a.CLI(directory,runner).call('probe')=='MOCK_RESULT'
         assert clock.value-started>30  # Each case would exceed the old host cutoff.
-        assert executions and 0<executions[0]<=120
+        assert executions and 0<executions[0]<=225
     else:
         with pytest.raises(TimeoutError): a.CLI(directory,runner).call('probe')
         if slow_stage=='remaining': assert executions==[]
@@ -592,6 +592,118 @@ def test_nonfinite_probe_deadline_cannot_bypass_budget(tmp_path,monkeypatch):
     for deadline in (None,float('inf'),float('nan')):
         with pytest.raises(ValueError,match='FINITE_PROBE_HOST_DEADLINE'):
             a.bridge(tmp_path/'bridge','probe',deadline)
+
+
+@pytest.mark.parametrize('minutes',[5,60])
+def test_source_bound_long_runtime_and_transport(tmp_path,monkeypatch,offline_github,minutes):
+    data=record();data.update(max_minutes=minutes,isolated_cp312=True)
+    for n in (1,2):
+        comment=offline_github[a.API+'/issues/comments/'+str(n)]
+        body=json.loads(comment['body']);body.update(max_minutes=minutes,isolated_cp312=True)
+        comment['body']=json.dumps(body)
+    allowed=a.authorize(data,INSTRUCTION,SHA,SHA,False,str(Path(sys.executable).resolve()),platform='linux')
+    assert allowed.seconds==minutes*60 and allowed.isolated_cp312
+    directory=tmp_path/'long';cli=FakeCLI(directory);original=cli.call
+    def call(op):
+        output=original(op)
+        if op=='probe':
+            output+='\nTORCHYAND_BOOTSTRAP:'+json.dumps(dict(nonce=a.state(directory)['name'],status='PASS',stage='complete',bytes=452635819,verified_wheels=30))
+        return output
+    cli.call=call
+    result=a.run(allowed,data,directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    assert result['outcome']=='TPU_PROBE_PASS' and result['bootstrap']['verified_wheels']==30
+    assert result['cleanup']['status']=='RELEASED'
+    seen=[]
+    def runner(argv,**kw):seen.append(kw['timeout']);return subprocess.CompletedProcess(argv,0,'mock','')
+    a.CLI(directory,runner).call('probe')
+    assert 0<seen[0]<=minutes*60-60
+    if minutes==60:assert seen[0]>300
+    assert cli.calls.count('allocate')==cli.calls.count('stop')==1
+
+
+@pytest.mark.parametrize('defect',['bootstrap-failed','nonce','absent','bad-timings'])
+def test_bootstrap_failure_releases_owned_session(tmp_path,monkeypatch,offline_github,defect):
+    data=record();data.update(isolated_cp312=True)
+    for n in (1,2):
+        comment=offline_github[a.API+'/issues/comments/'+str(n)]
+        body=json.loads(comment['body']);body['isolated_cp312']=True;comment['body']=json.dumps(body)
+    allowed=a.authorize(data,INSTRUCTION,SHA,SHA,False,str(Path(sys.executable).resolve()),platform='linux')
+    directory=tmp_path/defect;cli=FakeCLI(directory);original=cli.call
+    def call(op):
+        if op!='probe':return original(op)
+        payload=dict(nonce=a.state(directory)['name'],status='BLOCKED',stage='preflight',reason='PYTHON312_UNAVAILABLE',error_class='FileNotFoundError')
+        if defect=='nonce':payload['nonce']='foreign'
+        if defect=='bad-timings':payload['timings']=[]
+        return '' if defect=='absent' else 'TORCHYAND_BOOTSTRAP:'+json.dumps(payload)
+    cli.call=call
+    result=a.run(allowed,data,directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    assert result['outcome']=='DEVICE_OR_PROBE_BLOCKED' and result['cleanup']['status']=='RELEASED'
+    if defect=='bootstrap-failed':assert result['bootstrap']['reason']=='PYTHON312_UNAVAILABLE'
+    assert cli.calls.count('stop')==1
+
+
+def test_real_watch_process_handles_dead_parent_with_long_horizon(tmp_path):
+    directory=tmp_path/'process-watch';cli=FakeCLI(directory)
+    a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    parent=subprocess.Popen([sys.executable,'-c','pass']);parent.wait(timeout=10)
+    data=a.state(directory);data['parent']=parent.pid;data['deadline']=time.monotonic()+3600
+    data['permit']['seconds']=3600;data['phase']='ALLOCATED';a.save(directory,data)
+    # File-backed fake backend: the watchdog is a real independent OS process.
+    a.guard.write_json(directory/'fake-backend.json',[line('?', 'unrelated'),line(data['name'],'owned-endpoint')])
+    code='''import sys,json
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from tools import tpu_live_adapter as a
+d=Path(sys.argv[2])
+class CLI:
+ def call(self,op):
+  p=d/'fake-backend.json';rows=json.loads(p.read_text())
+  if op=='sessions':return '\\n'.join(rows) if rows else a.EMPTY
+  assert op=='stop' and a.state(d)['endpoint']=='owned-endpoint'
+  a.guard.write_json(p,rows[:1]);return 'stopped'
+raise SystemExit(a.watch(d,CLI()))
+'''
+    p=subprocess.Popen([sys.executable,'-c',code,str(a.ROOT),str(directory)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+    stdout,stderr=p.communicate(timeout=15)
+    assert p.returncode==0,stderr.decode()
+    released=json.loads((directory/'release.json').read_text())
+    assert released['trigger']=='PARENT_TERMINATED' and released['status']=='RELEASED'
+    assert json.loads((directory/'fake-backend.json').read_text())==[line('?', 'unrelated')]
+
+
+@pytest.mark.parametrize('remote_failure',[False,True])
+def test_long_budget_reaches_cli_remote_and_isolated_launcher(tmp_path,monkeypatch,offline_github,remote_failure):
+    import types
+    test_bridge_exact_dispatch_auth_guard_and_no_double_allocate(tmp_path,monkeypatch)
+    directory=tmp_path/'bridge'
+    data=a.state(directory);data['permit'].update(seconds=3600,isolated_cp312=True)
+    clock=SimpleNamespace(value=time.monotonic());monkeypatch.setattr(a.time,'monotonic',lambda:clock.value)
+    data['deadline']=clock.value+3600;a.save(directory,data)
+    resource=record();resource.update(max_minutes=60,isolated_cp312=True)
+    a.guard.write_json(directory/'resource-approval.json',resource)
+    for n in (1,2):
+        comment=offline_github[a.API+'/issues/comments/'+str(n)]
+        body=json.loads(comment['body']);body.update(max_minutes=60,isolated_cp312=True);comment['body']=json.dumps(body)
+    common=sys.modules['colab_cli.common'];common.state=SimpleNamespace(get_session=lambda *a:None)
+    runtime=types.ModuleType('colab_cli.runtime');seen=[]
+    class Runtime:
+        def execute_code(self,code,**kw):
+            seen.append(kw['timeout']);assert kw['timeout']>300
+            clock.value+=400
+            if remote_failure:raise TimeoutError('CANARY_NATIVE_TIMEOUT')
+    runtime.ColabRuntime=Runtime;monkeypatch.setitem(sys.modules,'colab_cli.runtime',runtime)
+    def main():Runtime().execute_code('TORCHYAND_TPU_PROBE:')
+    sys.modules['colab_cli.cli'].main=main
+    def runner(argv,**kw):
+        assert kw['timeout']>300
+        a.bridge(directory,'probe',float(argv[-1]))
+        return subprocess.CompletedProcess(argv,0,'mock','')
+    if remote_failure:
+        with pytest.raises(TimeoutError):a.CLI(directory,runner).call('probe')
+    else:assert a.CLI(directory,runner).call('probe')=='mock'
+    assert seen and seen[0]<=3600-60-a.RETURN_MARGIN
+    assert '--without-pip' in (directory/'tiny_probe.py').read_text()
+    assert 'CANARY_NATIVE_TIMEOUT' not in ''.join(p.read_text() for p in evidence_for(directory).iterdir())
 
 
 def test_preflight_timeout_retains_terminal_blocked_record(tmp_path,monkeypatch):
@@ -702,7 +814,7 @@ def test_probe_stdout_with_stderr_is_parsed_and_persisted_safely(tmp_path,varian
         if variant=='invalid-json': output='TORCHYAND_TPU_PROBE:{broken CANARY_SECRET'
         if variant=='json-array': output='TORCHYAND_TPU_PROBE:["CANARY_SECRET"]'
         def runner(argv,**kwargs):
-            assert kwargs['shell'] is False and kwargs['timeout']<=180
+            assert kwargs['shell'] is False and kwargs['timeout']<=240
             return subprocess.CompletedProcess(argv,1 if variant=='nonzero' else 0,output,'CANARY_SECRET Authorization: Bearer TOKEN')
         return a.CLI(directory,runner).call(op)
     cli.call=call
