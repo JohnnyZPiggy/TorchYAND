@@ -1,0 +1,56 @@
+{
+  "status": "NUMERICAL_AND_TRANSPORT_CHECKS_PASS_GPT_REVIEW_PENDING",
+  "algorithm_source_sha": "8ba99c4448e5494290fbfa0f8e12120115dcb58b",
+  "adapter_source_sha": "c9b58d228de38c2f04443f0495d55ab26797afed",
+  "framework_source_sha": "8081b6e02eee0754903898d5afe5b112f1bb23d0",
+  "utc_packaged": "2026-10-20T18:06:37.740028+00:00",
+  "gpt_acceptance": "PENDING",
+  "source_files": {
+    "experiments/sae_mvsk/driver.py": "05177e466e76f7eb92d91ed9ea8240185330acec3567442ec6d31e4ceb96583e",
+    "experiments/sae_mvsk/artifacts.json": "4147105b6dd2547a2bd20ed4ab301e68e9c89789dfaf9376d09b67ea333a895a",
+    "experiments/sae_mvsk/README.md": "ed77c0c8dbd69dd8ae2d4e67ba659552221bc99fd85226a980a14f7c21154598",
+    "tests/test_sae_scientific_pilot.py": "e4fc5ae003623e2307da8fc60a1cc6d835c8403059247357dec1b8f0e0e7a303"
+  },
+  "evidence_files": {
+    "gpu-attempt-1-175309/colab-control.json": {
+      "bytes": 5937,
+      "sha256": "01b0e8e28774f97cb5af6044822b896e38faf8c2cfe316935d390fe3c9d0a02c"
+    },
+    "gpu-attempt-1-175309/mvsk-science.json": {
+      "bytes": 7365,
+      "sha256": "bcfc6efcc45e29f99a6d3479471b997de0881dceb810b7ac9e64433eabc6bf20"
+    },
+    "host-attempt-1.json": {
+      "bytes": 1656,
+      "sha256": "69a21cecc001a06742d3f3a6a1516649e08c18e6603ca8e636dfae0f2d1ef403"
+    },
+    "local-cpu/execution.json": {
+      "bytes": 700,
+      "sha256": "5c4ec6ab8ff41ff7182ce59db169edd39f1589af2be75c79e10fe561a24dd9fc"
+    },
+    "local-cpu/mvsk-science.json": {
+      "bytes": 3533,
+      "sha256": "3006480b3c96bda7af8b4ba1cb7ec09e09899ae872c190dc71020ed642a1ff79"
+    },
+    "local-cpu/tests.txt": {
+      "bytes": 953,
+      "sha256": "f80368d1b6a685b5d5629fd5b5c9e2c59af0553d24b39db89982948128964a13"
+    },
+    "preflight-175309/colab-control.json": {
+      "bytes": 3116,
+      "sha256": "19ea3cb8b5db70711c69b53a9a8caa7fee9c5589d85fe8bc9f2856685cdaf81f"
+    },
+    "summary.md": {
+      "bytes": 6732,
+      "sha256": "5bc812a569e847a613b6653f56ab92a6e6558845062a47d635d714cc18ba835e"
+    },
+    "transport-provenance.json": {
+      "bytes": 487,
+      "sha256": "c24cddbbf673250bba9f7e25961755d71b6a06fa0c2534abe08bfca1f62843e3"
+    },
+    "verification.json": {
+      "bytes": 1550,
+      "sha256": "609589322d02f88c248139f8cdab4ff76198129683e98d1ee15df44e0678d118"
+    }
+  }
+}

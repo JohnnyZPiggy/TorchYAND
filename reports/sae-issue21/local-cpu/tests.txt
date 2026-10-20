@@ -1,0 +1,11 @@
+<HOME>/.cache/sae-environments/torchyand-issue21-175309/lib/python3.12/site-packages/torch/_subclasses/functional_tensor.py:307: UserWarning: Failed to initialize NumPy: No module named 'numpy' (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:84.)
+  cpu = _conversion_method_template(device=torch.device("cpu"))
+test_cpu_oracle_and_nontrivial_kkt_convergence (__main__.ScientificPilotTests.test_cpu_oracle_and_nontrivial_kkt_convergence) ... ok
+test_independent_reference_rejects_bad_analytic_gradient (__main__.ScientificPilotTests.test_independent_reference_rejects_bad_analytic_gradient) ... ok
+test_mismatched_source_is_rejected (__main__.ScientificPilotTests.test_mismatched_source_is_rejected) ... ok
+test_reference_directional_finite_difference (__main__.ScientificPilotTests.test_reference_directional_finite_difference) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 1.971s
+
+OK

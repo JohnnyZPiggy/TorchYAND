@@ -1,0 +1,133 @@
+{
+  "source_sha": "c9b58d228de38c2f04443f0495d55ab26797afed",
+  "algorithm_source_sha": "8ba99c4448e5494290fbfa0f8e12120115dcb58b",
+  "framework_source_sha": "8081b6e02eee0754903898d5afe5b112f1bb23d0",
+  "classification": "SCIENTIFIC_MVSK_PILOT",
+  "status": "PASS",
+  "utc_start": "2026-10-20T18:01:24.980709+00:00",
+  "cpu": [
+    {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "shape": [
+        31,
+        5
+      ],
+      "seed": 20261021,
+      "atol": 3e-06,
+      "rtol": 3e-05,
+      "value": 0.027145283296704292,
+      "reference_value": 0.027145283296704292,
+      "objective_error": {
+        "max_abs": 0.0,
+        "max_tolerance_ratio": 0.0
+      },
+      "gradient_error": {
+        "max_abs": 3.725290298461914e-09,
+        "max_tolerance_ratio": 0.0010022480273619294
+      },
+      "quadratic": {
+        "status": "CONVERGED_KKT",
+        "x": [
+          0.25,
+          0.75
+        ],
+        "value": -0.0625,
+        "iterations": 1,
+        "accepted_steps": 1,
+        "simplex_sum_error": 0.0,
+        "minimum_weight": 0.25,
+        "independent_kkt_residual": 0.0,
+        "reported_kkt_residual": 0.0,
+        "known_solution_max_abs": 0.0,
+        "tolerance": 2e-05,
+        "global_optimum_claim": "ONLY_THIS_CONVEX_QUADRATIC"
+      },
+      "status": "PASS"
+    },
+    {
+      "device": "cpu",
+      "dtype": "torch.float64",
+      "shape": [
+        31,
+        5
+      ],
+      "seed": 20261021,
+      "atol": 2e-12,
+      "rtol": 2e-10,
+      "value": 0.027145282678610445,
+      "reference_value": 0.027145282678610445,
+      "objective_error": {
+        "max_abs": 0.0,
+        "max_tolerance_ratio": 0.0
+      },
+      "gradient_error": {
+        "max_abs": 3.469446951953614e-18,
+        "max_tolerance_ratio": 5.117508724258035e-07
+      },
+      "quadratic": {
+        "status": "CONVERGED_KKT",
+        "x": [
+          0.25,
+          0.75
+        ],
+        "value": -0.0625,
+        "iterations": 1,
+        "accepted_steps": 1,
+        "simplex_sum_error": 0.0,
+        "minimum_weight": 0.25,
+        "independent_kkt_residual": 0.0,
+        "reported_kkt_residual": 0.0,
+        "known_solution_max_abs": 0.0,
+        "tolerance": 2e-10,
+        "global_optimum_claim": "ONLY_THIS_CONVEX_QUADRATIC"
+      },
+      "status": "PASS"
+    }
+  ],
+  "gpu": "NOT_RUN",
+  "tpu": "NOT_RUN",
+  "compilation": "NOT_RUN",
+  "algorithm_files_verified": 50,
+  "seed": 20261021,
+  "environment": {
+    "torch": "2.11.0+cpu",
+    "python": "3.12.3",
+    "platform": "Linux",
+    "cpu_threads": 2,
+    "cuda_version": null,
+    "cuda_available": false,
+    "tf32": false
+  },
+  "benchmark": {
+    "T": 2048,
+    "n": 256,
+    "batch": 256,
+    "dtype": "torch.float32",
+    "seed": 20261021,
+    "operation": "PUBLIC_EAGER_VALUE_GRAD_VALIDATION_AND_PROJECTION",
+    "cpu_threads": 2,
+    "generation_and_centering_timed": false,
+    "cpu_resident": {
+      "first_call_for_shape_ms": 26.84738600000003,
+      "cold_scope": "FIRST_CALL_FOR_SHAPE_NOT_PROCESS_COLD",
+      "warmups": 2,
+      "repetitions_ms": [
+        16.396171000000237,
+        18.171526000001492,
+        14.286479000000796,
+        15.687419000000702,
+        12.951243000001611,
+        20.339048000000304,
+        22.80906699999896
+      ],
+      "median_ms": 16.396171000000237,
+      "iqr_ms": 4.268338000000149,
+      "min_ms": 12.951243000001611,
+      "max_ms": 22.80906699999896
+    },
+    "gpu": "NOT_RUN"
+  },
+  "utc_end": "2026-10-20T18:01:28.310394+00:00",
+  "elapsed_seconds": 3.3296832789999993
+}
