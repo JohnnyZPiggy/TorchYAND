@@ -129,3 +129,28 @@ pytest CPU suite. Exact SHA/results are recorded below after completion.
 | DURABLE_LOG_RECOVERY | WSL stdlib self-check PASS; pytest results below |
 | RAW_REMOTE_OUTPUT | NOT AVAILABLE |
 | SECOND_TPU_ALLOCATION | NOT RUN |
+
+## Completed implementation evidence
+
+Tested implementation SHA: `e3aa00a28c1dfc8b6e121539d2534043d5f9cb13`.
+Subsequent evidence-only commits do not change runtime/tests. Windows 11 build
+26200, Anaconda Python 3.14.6, torch 2.14.1+cpu, pytest 9.0.3;
+OMP_NUM_THREADS=1, MKL_NUM_THREADS=1.
+
+- `python -m pytest tests/test_tpu_live_adapter.py tests/test_tpu_safe_adapter.py tests/test_colab_tpu_guard.py -q`:
+  **217 passed in 68.53s**, exit 0 (119 adapter checks +98 reused guard/mock checks).
+- Default `python tools/tpu_live_adapter.py`: DRY_RUN, exit 0; no diagnostic
+  directory creation, network or Colab subprocess. `git diff --check`: exit 0.
+- Existing WSL Python 3.15.0 stdlib-only self-check and separate-invocation
+  hash/persistence verification: PASS, exit 0; no cloud/process launch inside
+  self-check, no installed packages changed. WSL pytest suite is NOT RUN.
+- `python -m pytest tests/ -q`: **1467 passed, 43 skipped, 1 warning in
+  167.72s**, exit 0, at the exact implementation SHA above. Warning remains
+  the existing torch.jit.script / Python 3.14 FutureWarning in the MVSK oracle.
+- Logs (ignored): benchmarks/results/issue-14/scoped.txt and regression.txt;
+  WSL self-check script/pointer are also ignored, with no raw remote material.
+
+LOCAL_FAKE_DIAGNOSTICS=PASS; DURABLE_LOG_RECOVERY=PASS for the local synthetic
+lifecycle and separate WSL reader. Diff is three files (adapter, its tests,
+this report). Next: independent Architect T2 review of the PR. No automatic
+second probe, resource allocation, approval/budget expansion or self-merge.
