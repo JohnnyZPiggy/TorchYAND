@@ -32,33 +32,67 @@ API = 'https://api.github.com/repos/JohnnyZPiggy/TorchYAND'
 SCIENTIST_ID = 158853624
 EVIDENCE_ROOT = Path.home()/'.local/state/torchyand/probes'
 EMPTY = '[colab] No active sessions found on server.'
-PROBE = '''import json, os, sys
+PROBE_STAGES = ('import_torch', 'import_torch_xla', 'import_torch_xla_runtime', 'versions',
+                'pjrt', 'device', 'matmul', 'sync', 'result', 'complete')
+PROBE_ERRORS = ('ModuleNotFoundError', 'ImportError', 'RuntimeError', 'ValueError', 'TypeError',
+                'AttributeError', 'AssertionError', 'OSError', 'Exception')
+MODULE_NAME = r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*'
+PROBE = '''import json, os, sys, re
 os.environ['PJRT_DEVICE'] = 'TPU'
-report = dict(nonce=NONCE, status='BLOCKED', python=sys.version.split()[0])
+report = dict(nonce=NONCE, status='BLOCKED', python=sys.version.split()[0], stage='import_torch')
 try:
     import torch
+    report['torch'] = str(torch.__version__)
+    report['stage'] = 'import_torch_xla'
     import torch_xla as xla
+    report['torch_xla'] = str(xla.__version__)
+    report['stage'] = 'import_torch_xla_runtime'
     import torch_xla.runtime as xr
-    report.update(torch=str(torch.__version__), torch_xla=str(xla.__version__))
+    report['stage'] = 'versions'
     if torch.__version__.split('+')[0] != xla.__version__.split('+')[0]:
         raise RuntimeError('VERSION_PAIR_MISMATCH')
+    report['stage'] = 'pjrt'
     if xr.device_type() != 'TPU':
         raise RuntimeError('NOT_TPU')
+    report['stage'] = 'device'
     device = xla.device()
     real = xla.real_devices()
     kinds = [str(a.get('device_kind', '')) for a in xr.global_runtime_device_attributes()]
     if device.type != 'xla' or not real or any(not d.startswith('TPU:') for d in real) or not kinds or any('TPU' not in k.upper() for k in kinds):
         raise RuntimeError('TPU_IDENTITY_MISSING')
+    report['stage'] = 'matmul'
     value = torch.tensor([[1., 2.], [3., 4.]], device=device) @ torch.ones(2, 1, device=device)
+    report['stage'] = 'sync'
     xla.sync(wait=True)
+    report['stage'] = 'result'
     actual = value.cpu().tolist()
     if actual != [[3.], [7.]]:
         raise RuntimeError('NUMERICAL_MISMATCH')
-    report.update(status='PASS', PJRT='TPU', real_devices=real, device_kinds=kinds, result=actual)
+    report.update(status='PASS', stage='complete', PJRT='TPU', real_devices=real, device_kinds=kinds, result=actual)
 except Exception as error:
-    report['error'] = type(error).__name__
+    kind = 'ModuleNotFoundError' if isinstance(error, ModuleNotFoundError) else type(error).__name__
+    report['error_class'] = kind if kind in ('ModuleNotFoundError', 'ImportError', 'RuntimeError',
+        'ValueError', 'TypeError', 'AttributeError', 'AssertionError', 'OSError') else 'Exception'
+    if isinstance(error, ModuleNotFoundError):
+        name = error.name
+        report['missing_module'] = name if isinstance(name, str) and len(name) <= 96 and re.fullmatch(
+            r'[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*', name) else 'UNKNOWN'
 print('TORCHYAND_TPU_PROBE:' + json.dumps(report))
 '''
+
+
+
+def probe_diagnostic(probe):
+    """Only nonce-validated records reach this bounded diagnostic projection."""
+    stage = probe.get('stage')
+    kind = probe.get('error_class', probe.get('error'))
+    result = dict(status=probe.get('status') if probe.get('status') in ('PASS', 'BLOCKED') else 'UNKNOWN',
+                  stage=stage if stage in PROBE_STAGES else 'UNKNOWN',
+                  error_class=None if kind is None else kind if kind in PROBE_ERRORS else 'UNKNOWN')
+    if kind == 'ModuleNotFoundError':
+        name = probe.get('missing_module')
+        result['missing_module'] = name if isinstance(name, str) and len(name) <= 96 and re.fullmatch(MODULE_NAME, name) else 'UNKNOWN'
+    return result
 
 
 @dataclass(frozen=True)
@@ -99,6 +133,8 @@ def event(evidence, stage, name, outcome='PENDING', error=None, stdout=None, std
         for key, value in (('stdout_bytes', stdout), ('stderr_bytes', stderr)):
             if value is not None:
                 row[key] = len(value if isinstance(value, bytes) else value.encode('utf-8'))
+                if key == 'stderr_bytes':
+                    row['stderr_present'] = bool(value)
         fd = os.open(evidence/'timeline.jsonl', os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600)
         try:
             os.write(fd, (json.dumps(row)+'\n').encode()); os.fsync(fd)
@@ -275,9 +311,10 @@ class CLI:
             event(evidence, operation, 'subprocess_interrupted', 'FAILED', error,
                   getattr(error, 'stdout', None), getattr(error, 'stderr', None))
             raise
-        event(evidence, operation, 'subprocess_return', 'PASS' if not reply.returncode else 'FAILED',
+        failed = reply.returncode or (operation != 'probe' and reply.stderr.strip())
+        event(evidence, operation, 'subprocess_return', 'FAILED' if failed else 'PASS',
               stdout=reply.stdout, stderr=reply.stderr)
-        if reply.returncode or reply.stderr.strip():
+        if failed:
             raise RuntimeError('CLI_FAILED_PRIVATE_DIAGNOSTICS_REQUIRED')
         return reply.stdout
 
@@ -447,6 +484,7 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
     cli = cli_factory(directory)
     guardian = None
     outcome, error_kind = 'BLOCKED', None
+    diagnostic = None
     try:
         if cli.call('version').strip() != 'Version: 0.7.4':
             raise ValueError('CLI_VERSION_MISMATCH')
@@ -474,7 +512,10 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
         if len(markers) != 1:
             raise ValueError('NO_UNIQUE_PROBE_EVIDENCE')
         probe = timed(evidence, 'result_parse', json.loads, markers[0])
-        if (probe.get('nonce') != data['name'] or probe.get('status') != 'PASS'
+        if not isinstance(probe, dict) or probe.get('nonce') != data['name']:
+            raise ValueError('PROBE_NONCE_MISMATCH')
+        diagnostic = probe_diagnostic(probe)
+        if (probe.get('status') != 'PASS'
                 or probe.get('PJRT') != 'TPU' or probe.get('result') != [[3.], [7.]]
                 or not probe.get('real_devices') or any(not x.startswith('TPU:') for x in probe['real_devices'])):
             raise ValueError('PROBE_FAILED')
@@ -499,6 +540,8 @@ def run(permit, record, directory, cli_factory=CLI, watch_factory=start_watch):
                 outcome, error_kind = 'WATCHDOG_FAILED', 'IndependentCleanupUnavailable'
         result = dict(outcome=outcome, cleanup=cleanup, error=error_kind, source_sha=permit.source_sha, run_id=evidence.name, execution_mode=mode,
                       XLA_COMPILE='NOT BENCHMARKED', ACTUAL_CU='NOT MEASURED', HARD_STOP_GUARANTEE='NOT_PROVEN')
+        if diagnostic is not None:
+            result['probe_diagnostic'] = diagnostic
         try:
             finish_evidence(evidence, result)
         except OSError:
