@@ -1,4 +1,6 @@
 """CPU/MOCK ONLY. No installed Colab entrypoint, account or TPU is invoked."""
+from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 from dataclasses import replace
 import json
 import os
@@ -20,6 +22,29 @@ def record():
     return dict(source_sha=SHA, device='v5e1', max_sessions=1, max_minutes=5,
                 zero_retries=True, supervised=True, decision='APPROVED',
                 residual_outage_risk_ack=True, quota_policy='price_not_a_gate_no_purchase', approval_ref=APPROVAL)
+
+
+def github_records():
+    now = datetime.now(timezone.utc)
+    created = (now-timedelta(minutes=5)).isoformat()
+    expiry = (now+timedelta(minutes=30)).isoformat()
+    items = {a.API+'/git/ref/heads/main': dict(ref='refs/heads/main',object=dict(type='commit',sha=SHA))}
+    for identifier, reference, kind in [(1,APPROVAL,'TPU_RESOURCE_APPROVAL'),(2,INSTRUCTION,'TPU_SMOKE_EXECUTION')]:
+        body = {k:v for k,v in record().items() if k!='approval_ref'}
+        body.update(kind=kind,expires_at=expiry)
+        if identifier==2: body['approval_ref']=APPROVAL
+        items[a.API+'/issues/comments/'+str(identifier)] = dict(id=identifier,html_url=reference,
+            issue_url=a.API+'/issues/7',user=dict(login='JohnnyZPiggy',id=a.SCIENTIST_ID,type='User'),
+            body=json.dumps(body),created_at=created,updated_at=created)
+    return items
+
+
+@pytest.fixture(autouse=True)
+def offline_github(monkeypatch):
+    # Every positive record is served by an explicit offline fake, never live GitHub.
+    items=github_records()
+    monkeypatch.setattr(a,'github_json',lambda url:deepcopy(items[url]))
+    return items
 
 
 def permit():
@@ -208,6 +233,8 @@ def test_bridge_exact_dispatch_auth_guard_and_no_double_allocate(tmp_path, monke
     directory=tmp_path/'bridge';cli=FakeCLI(directory)
     a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
     data=a.state(directory);data['phase']='NAMED_ALLOCATION_PENDING';a.save(directory,data)
+    real_validate=a.validate_record
+    monkeypatch.setattr(a,'validate_record',lambda *args:real_validate(*args[:6],platform='linux'))
     real_authorize=a.authorize
     monkeypatch.setattr(a,'authorize',lambda *args:real_authorize(*args,platform='linux'))
     monkeypatch.setattr(a.importlib.metadata,'version',lambda _: '0.7.4')
@@ -243,3 +270,127 @@ def test_dead_watchdog_blocks_allocation(tmp_path):
                  watch_factory=lambda d:DeadBefore(d,cli))
     assert result['outcome']=='BLOCKED'
     assert 'allocate' not in cli.calls and 'probe' not in cli.calls and 'stop' not in cli.calls
+
+
+@pytest.mark.parametrize('defect',[
+    'nonexistent','wrong-id','wrong-url','wrong-issue','wrong-author','wrong-user-id','bot',
+    'stale','expired','future','unbounded','edited-after-execution','wrong-sha','wrong-device',
+    'wrong-count','wrong-time','wrong-quota','missing-risk','negated','wrong-kind','wrong-approval',
+    'remote-ahead','remote-unavailable','remote-not-commit'])
+@pytest.mark.parametrize('which',[1,2])
+def test_live_gate_negative_zero_colab(tmp_path,monkeypatch,offline_github,defect,which):
+    items=offline_github
+    key=a.API+'/issues/comments/'+str(which);comment=items[key]
+    body=json.loads(comment['body'])
+    now=datetime.now(timezone.utc)
+    if defect=='nonexistent': del items[key]
+    elif defect=='wrong-id': comment['id']=999
+    elif defect=='wrong-url': comment['html_url']=APPROVAL+'0'
+    elif defect=='wrong-issue': comment['issue_url']=a.API+'/issues/12'
+    elif defect=='wrong-author': comment['user']['login']='attacker'
+    elif defect=='wrong-user-id': comment['user']['id']=1
+    elif defect=='bot': comment['user']['type']='Bot'
+    elif defect=='stale': comment['created_at']=(now-timedelta(days=2)).isoformat()
+    elif defect=='expired': body['expires_at']=(now-timedelta(seconds=1)).isoformat()
+    elif defect=='future': comment['created_at']=(now+timedelta(seconds=1)).isoformat()
+    elif defect=='unbounded': body['expires_at']=(now+timedelta(days=2)).isoformat()
+    elif defect=='edited-after-execution':
+        items[a.API+'/issues/comments/1']['updated_at']=(now-timedelta(seconds=1)).isoformat()
+    elif defect=='wrong-sha': body['source_sha']='b'*40
+    elif defect=='wrong-device': body['device']='v6e1'
+    elif defect=='wrong-count': body['max_sessions']=True
+    elif defect=='wrong-time': body['max_minutes']=6
+    elif defect=='wrong-quota': body['quota_policy']='unlimited'
+    elif defect=='missing-risk': del body['residual_outage_risk_ack']
+    elif defect=='negated': body['decision']='NOT APPROVED'
+    elif defect=='wrong-kind': body['kind']='ARCHITECT_REVIEW'
+    elif defect=='wrong-approval': body['approval_ref']=INSTRUCTION
+    elif defect=='remote-ahead': items[a.API+'/git/ref/heads/main']['object']['sha']='b'*40
+    elif defect=='remote-unavailable': del items[a.API+'/git/ref/heads/main']
+    elif defect=='remote-not-commit': items[a.API+'/git/ref/heads/main']['object']['type']='tag'
+    comment['body']=json.dumps(body)
+    approval=tmp_path/'approval.json';approval.write_text(json.dumps(record()))
+    seen=[]
+    def git(argv,**kwargs):
+        seen.append(argv)
+        if argv[1:]==['status','--porcelain']: return ''
+        return SHA  # Stale/manipulated origin/main still agrees with local HEAD.
+    monkeypatch.setattr(a.subprocess,'check_output',git)
+    def veto(*args,**kwargs): pytest.fail('NO COLAB PROCESS OR RUN PERMITTED')
+    monkeypatch.setattr(a.subprocess,'run',veto);monkeypatch.setattr(a.subprocess,'Popen',veto)
+    monkeypatch.setattr(a,'run',veto)
+    validate=a.validate_record
+    monkeypatch.setattr(a,'validate_record',lambda *args:validate(*args[:6],platform='linux'))
+    with pytest.raises((ValueError,KeyError)):
+        a.main(['--live','--approval-file',str(approval),'--instruction-ref',INSTRUCTION,
+                '--cli-python',str(Path(sys.executable).resolve()),'--output-dir',str(tmp_path/'never')])
+    assert not (tmp_path/'never').exists()
+
+
+def test_local_approved_json_alone_fails(monkeypatch):
+    def missing(url): raise OSError('offline / 404')
+    monkeypatch.setattr(a,'github_json',missing)
+    with pytest.raises(OSError): permit()
+
+
+def test_github_reader_bounded_fixed_origin(monkeypatch):
+    # Exercise the actual stdlib transport against fake response objects only.
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def geturl(self): return target
+        def read(self,count): assert count==65537;return b'{}'
+    target=a.API+'/git/ref/heads/main'
+    def opening(request,timeout):
+        assert request.full_url==target and timeout==10
+        assert not request.has_header('Authorization')
+        return Response()
+    monkeypatch.setattr(a.urllib.request,'urlopen',opening)
+    # autouse fixture replaced the helper; call saved original below.
+    assert REAL_GITHUB_JSON(target)=={}
+    with pytest.raises(ValueError): REAL_GITHUB_JSON('https://evil.example/main')
+
+
+REAL_GITHUB_JSON = __import__('tools.tpu_live_adapter',fromlist=['github_json']).github_json
+
+
+def test_stale_tracking_ref_rejected_even_if_live_main_matches(tmp_path,monkeypatch):
+    approval=tmp_path/'approval.json';approval.write_text(json.dumps(record()))
+    def git(argv,**kwargs):
+        if argv[-1]=='origin/main': return 'b'*40
+        if argv[1]=='status': return ''
+        return SHA
+    monkeypatch.setattr(a.subprocess,'check_output',git)
+    def veto(*args,**kwargs): pytest.fail('No Colab')
+    monkeypatch.setattr(a.subprocess,'Popen',veto);monkeypatch.setattr(a,'run',veto)
+    validate=a.validate_record
+    monkeypatch.setattr(a,'validate_record',lambda *args:validate(*args[:6],platform='linux'))
+    with pytest.raises(ValueError):
+        a.main(['--live','--approval-file',str(approval),'--instruction-ref',INSTRUCTION,
+                '--cli-python',str(Path(sys.executable).resolve()),'--output-dir',str(tmp_path/'never')])
+
+
+def test_direct_bridge_allocation_rechecks_github_before_cli(tmp_path,monkeypatch,offline_github):
+    directory=tmp_path/'child-auth';cli=FakeCLI(directory)
+    a.run(permit(),record(),directory,cli_factory=lambda _:cli,watch_factory=lambda d:FakeWatch(d,cli))
+    offline_github[a.API+'/issues/comments/2']['user']['id']=1
+    validate=a.validate_record
+    monkeypatch.setattr(a,'validate_record',lambda *args:validate(*args[:6],platform='linux'))
+    monkeypatch.setattr(a.importlib.metadata,'version',lambda *args:pytest.fail('No CLI import'))
+    with pytest.raises(ValueError,match='IDENTITY'): a.bridge(directory,'allocate')
+    assert not (directory/'allocation-attempted').exists()
+
+
+@pytest.mark.parametrize('failure',['timeout','redirect','oversize','invalid-json'])
+def test_github_transport_failures(monkeypatch,failure):
+    target=a.API+'/git/ref/heads/main'
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def geturl(self): return 'https://evil.example' if failure=='redirect' else target
+        def read(self,n): return b'x'*65537 if failure=='oversize' else b'not-json'
+    def opening(*args,**kwargs):
+        if failure=='timeout': raise TimeoutError('mock timeout')
+        return Response()
+    monkeypatch.setattr(a.urllib.request,'urlopen',opening)
+    with pytest.raises((ValueError,TimeoutError)): REAL_GITHUB_JSON(target)

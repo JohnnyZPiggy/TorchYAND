@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import uuid
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -25,6 +26,8 @@ from tools import colab_tpu_guard as guard
 CHILD = ('import sys;sys.path.insert(0,sys.argv[1]);from tools import tpu_live_adapter as a;'
          'raise SystemExit(a.child(sys.argv[2:]))')
 REFERENCE = r'https://github\.com/JohnnyZPiggy/TorchYAND/issues/7#issuecomment-[0-9]+'
+API = 'https://api.github.com/repos/JohnnyZPiggy/TorchYAND'
+SCIENTIST_ID = 158853624
 EMPTY = '[colab] No active sessions found on server.'
 PROBE = '''import json, os, sys
 os.environ['PJRT_DEVICE'] = 'TPU'
@@ -65,7 +68,7 @@ class Permit:
     seconds: int = 300
 
 
-def authorize(record, instruction, sha, merged_sha, dirty, cli_python, platform=sys.platform):
+def validate_record(record, instruction, sha, merged_sha, dirty, cli_python, platform=sys.platform):
     if (not isinstance(record, dict) or record.get('source_sha') != sha or sha != merged_sha or dirty
             or not isinstance(sha, str) or not re.fullmatch(r'[0-9a-f]{40}', sha)
             or record.get('device') != 'v5e1' or type(record.get('max_sessions')) is not int
@@ -80,6 +83,60 @@ def authorize(record, instruction, sha, merged_sha, dirty, cli_python, platform=
     if platform not in ('linux', 'darwin') or not Path(cli_python).is_absolute():
         raise ValueError('USE_EXISTING_LINUX_WSL_OR_MACOS_CLI_PYTHON')
     return Permit(sha, record['approval_ref'], instruction, str(cli_python), seconds=record['max_minutes']*60)
+
+
+def github_json(url):
+    """Fixed public GitHub API only; bounded read, no credentials or redirects."""
+    if not url.startswith(API + '/'):
+        raise ValueError('UNTRUSTED_GITHUB_API')
+    request = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json',
+                                                 'User-Agent': 'TorchYAND-approval-verifier'})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        if response.geturl() != url:
+            raise ValueError('GITHUB_REDIRECT_REJECTED')
+        raw = response.read(65537)
+        if len(raw) > 65536:
+            raise ValueError('GITHUB_RESPONSE_TOO_LARGE')
+        return json.loads(raw)
+
+
+def authorize(record, instruction, sha, merged_sha, dirty, cli_python, platform=sys.platform):
+    permit = validate_record(record, instruction, sha, merged_sha, dirty, cli_python, platform)
+    remote = github_json(API + '/git/ref/heads/main')
+    if (remote.get('ref') != 'refs/heads/main' or remote.get('object', {}).get('type') != 'commit'
+            or remote['object'].get('sha') != sha):
+        raise ValueError('LIVE_REMOTE_MAIN_MISMATCH')
+    now = datetime.now(timezone.utc)
+    expected = {key: value for key, value in record.items() if key != 'approval_ref'}
+    previous_update = None
+    for reference, kind in ((permit.approval_ref, 'TPU_RESOURCE_APPROVAL'),
+                            (instruction, 'TPU_SMOKE_EXECUTION')):
+        comment_id = int(reference.rsplit('-', 1)[1])
+        comment = github_json(API + '/issues/comments/' + str(comment_id))
+        user = comment.get('user', {})
+        if (type(comment.get('id')) is not int or comment['id'] != comment_id
+                or comment.get('html_url') != reference or comment.get('issue_url') != API + '/issues/7'
+                or user.get('login') != 'JohnnyZPiggy' or user.get('id') != SCIENTIST_ID
+                or user.get('type') != 'User'):
+            raise ValueError('SCIENTIST_COMMENT_IDENTITY_MISMATCH')
+        body = json.loads(comment['body'])
+        created = datetime.fromisoformat(comment['created_at'].replace('Z', '+00:00'))
+        updated = datetime.fromisoformat(comment['updated_at'].replace('Z', '+00:00'))
+        expires = datetime.fromisoformat(body['expires_at'].replace('Z', '+00:00'))
+        if (created.tzinfo is None or updated.tzinfo is None or expires.tzinfo is None
+                or not created <= updated <= now < expires
+                or (now-created).total_seconds() > 86400
+                or (expires-created).total_seconds() > 86400
+                or previous_update is not None and created < previous_update):
+            raise ValueError('SCIENTIST_COMMENT_EXPIRED_OR_OUT_OF_ORDER')
+        scope = dict(expected, kind=kind, expires_at=body['expires_at'])
+        if kind == 'TPU_SMOKE_EXECUTION':
+            scope['approval_ref'] = permit.approval_ref
+        # Canonical JSON forbids ambiguous prose/negated approval or extra scope.
+        if (body != scope or any(type(body.get(k)) is not type(v) for k, v in scope.items())):
+            raise ValueError('SCIENTIST_COMMENT_SCOPE_MISMATCH')
+        previous_update = updated
+    return permit
 
 
 def sessions(text):
@@ -144,8 +201,8 @@ def bridge(directory, operation):
     permit = Permit(**data['permit'])
     # Child validates the recorded two-step decision; never accepts mock:// records.
     record = json.loads((directory/'resource-approval.json').read_text())
-    if authorize(record, permit.instruction_ref, permit.source_sha, permit.source_sha, False,
-                 permit.cli_python) != permit or time.monotonic() >= data['deadline']:
+    if validate_record(record, permit.instruction_ref, permit.source_sha, permit.source_sha, False,
+                       permit.cli_python) != permit or time.monotonic() >= data['deadline']:
         raise ValueError('CHILD_PERMIT_INVALID')
     name = data['name']
     arguments = {'version': ['version'], 'sessions': ['sessions'],
@@ -154,6 +211,8 @@ def bridge(directory, operation):
                  'stop': ['stop', '-s', name]}
     if operation not in arguments:
         raise ValueError('COMMAND_NOT_ALLOWLISTED')
+    if operation in ('allocate', 'probe'):
+        authorize(record, permit.instruction_ref, permit.source_sha, permit.source_sha, False, permit.cli_python)
     if operation == 'allocate':
         if data['phase'] != 'NAMED_ALLOCATION_PENDING' or not (directory/'watch-ready').exists():
             raise ValueError('WATCHDOG_OR_PENDING_JOURNAL_MISSING')

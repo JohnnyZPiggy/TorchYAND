@@ -57,10 +57,31 @@ a supervised Engineer may prepare a private approval JSON with:
 ```
 
 A distinct Issue #7 comment URL records the future explicit run instruction.
-References are validated for shape/distinctness, not authenticated over GitHub:
-the supervising Engineer must verify actual authors/content, merged SHA and
-fresh origin/main locally. These records are deliberate operator inputs, not
-cryptographic authority; fixtures are not approvals. No rate/balance field is
+The adapter reads both comments from the fixed public GitHub REST API and
+requires login JohnnyZPiggy AND immutable account ID 158853624, type User,
+matching comment ID, exact HTML URL and Issue #7 API URL. Local JSON and
+URL shape alone cannot authorize anything; fixtures require an injected fake.
+Each comment body must be one JSON object with the exact local scope fields
+above (except approval_ref), plus kind and expires_at (timezone-aware ISO8601).
+The approval kind is TPU_RESOURCE_APPROVAL. The separate execution comment kind
+is TPU_SMOKE_EXECUTION and additionally includes approval_ref pointing to that
+approval. Both must contain the same exact SHA/device/session/time/quota/risk
+scope. No prose, unrelated fields, boolean numeric limits or negative decisions
+are accepted. Both must be no older than 24 hours, not future-dated, and unexpired;
+expires_at cannot exceed creation +24 hours. Execution creation must be at or
+after the approval's last edit. Editing approval after execution requires a new
+execution record. Scientist must actually publish these separate decisions;
+this document and local files do not grant authority.
+
+Before authorization, a fresh GET of the fixed repository's git/ref/heads/main
+must return refs/heads/main, type commit and the same SHA as clean local HEAD
+and origin/main. The remote URL is not taken from local git configuration.
+A stale/manipulated local tracking ref, remote mismatch or failed read blocks
+execution. Allocation/probe bridge rechecks live main and both comments before
+loading Colab CLI. Existing cleanup remains available from private owned state
+without depending on renewed GitHub authorization during an outage. There is
+no atomic lock across GitHub reads and provider allocation; this establishes
+fresh checks, not immunity to subsequent upstream changes. No rate/balance field is
 required. No purchase, upgrade or unlimited-runtime consent is inferred.
 
 Future invocation only, from the reviewed clean checkout on Linux/WSL/macOS:
@@ -106,7 +127,7 @@ local watchdog. Local timeout is neither proof of release nor a CU charge cap.
 
 ## Local evidence
 
-Implementation SHA and completed test results are appended after execution.
+The original-cycle results below are retained as history; current T2 revision evidence is appended separately.
 Only local Windows CPU/Mock tests were used; injected transports never invoke
 installed Colab. Existing guard tests terminate a real local parent process to
 check independent watchdog survival; new tests bind live cleanup to that trigger.
@@ -154,3 +175,24 @@ CPU_TESTS=PASS; MOCK_CLEANUP=PASS. Next: Architect independent T2 review of this
 PR. No automatic merge/experiment follows. After acceptance, a separate explicit
 bounded experiment command may start the first real probe; price research is
 not a prerequisite.
+
+
+## T2 revision — only authorization and live main provenance
+
+Addresses [Architect review](https://github.com/JohnnyZPiggy/TorchYAND/pull/13#issuecomment-6278370443).
+Only the two requested gates, their tests and this note change from reviewed head
+5c3e0019bd435f177af08f8d274b44fa3c70d40f. Watchdog, cleanup, solver, dependencies,
+CI and hardware selection are unchanged. Reuses stdlib urllib for bounded
+10-second public API reads, max 64 KiB each, no credentials; non-matching final
+response URL and malformed/failed response are rejected. No fallback to local
+JSON, local tracking ref alone, cached approval, or cost investigation exists.
+
+New negative tests exercise nonexistent/forged IDs/URLs, another Issue, wrong
+login/account ID/bot, stale/expired/future/unbounded/out-of-order comments,
+wrong SHA/device/session/time/quota/risk/kind/decision/approval linkage,
+stale origin/main, manipulated matching local refs with different live main,
+remote outage/wrong ref type, direct bridge invocation and transport timeout,
+redirect, oversize and malformed JSON. They reject before any Colab transport,
+CLI import or output-directory creation. All GitHub/Colab responses in tests
+are offline fakes, including positive authorizations. No real run authorization
+has been granted or manufactured by these tests.
