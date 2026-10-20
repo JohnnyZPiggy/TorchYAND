@@ -131,9 +131,9 @@ def cleanup(directory, state, owner, session, deadline, cli, trigger=None):
     return result
 
 
-def wait_for_trigger(directory, deadline, buffer, parent_pid):
+def wait_for_trigger(directory, deadline, buffer, parent_pid, max_horizon=5):
     """Shared bounded monitor loop; callers own their journal/cleanup schema."""
-    if not math.isfinite(deadline) or not math.isfinite(buffer) or not 0 < buffer < 5 or not 0 < deadline-time.monotonic() <= 5 or parent_pid <= 0:
+    if not math.isfinite(deadline) or not math.isfinite(buffer) or not 0 < buffer < max_horizon or not 0 < deadline-time.monotonic() <= max_horizon or parent_pid <= 0:
         raise ValueError('Invalid bounded watchdog configuration')
     reason = 'DEADLINE'
     while time.monotonic() < deadline-buffer:
