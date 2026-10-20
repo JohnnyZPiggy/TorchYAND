@@ -1,0 +1,35 @@
+{
+  "status": "NUMERICAL_AND_TRANSPORT_CHECKS_PASS_GPT_REVIEW_PENDING",
+  "algorithm_source_sha": "8ba99c4448e5494290fbfa0f8e12120115dcb58b",
+  "adapter_source_sha": "c9b58d228de38c2f04443f0495d55ab26797afed",
+  "framework_source_sha": "8081b6e02eee0754903898d5afe5b112f1bb23d0",
+  "attempts": 1,
+  "second_attempt": "NOT_NEEDED_FIRST_ATTEMPT_PASS",
+  "actual_device": {
+    "requested": "T4",
+    "observed": "Tesla T4",
+    "compute_capability": [
+      7,
+      5
+    ],
+    "total_memory_bytes": 15637086208,
+    "tensor_device": "cuda:0"
+  },
+  "cuda_numerical_checks": "PASS",
+  "artifact_bytes": 7365,
+  "artifact_sha256": "bcfc6efcc45e29f99a6d3479471b997de0881dceb810b7ac9e64433eabc6bf20",
+  "authenticated_cleanup": true,
+  "independent_authenticated_zero": true,
+  "cpu_model": "NOT_RECORDED",
+  "tpu": "NOT_RUN",
+  "compile": "NOT_RUN",
+  "execution_handoffs": 0,
+  "final_evidence_handoffs": 1,
+  "host_wrapper_sha256": "c3f283628f01a3914ec389475b0ed3af80081a358e7e215f3dbddae4effcd22d",
+  "local_preparation_failures": [
+    "Initial /tmp venv absent on later invocation; cause unproven; recreated in user cache.",
+    "Windows CRLF checkout failed exact-byte source verification; restored baseline Git bytes; no algorithm blob changed."
+  ],
+  "local_optional_dependency_warning": "NumPy absent; torch warning recorded; no numpy API used.",
+  "clock_note": "Host UTC interval is about 1.492 seconds shorter than monotonic elapsed; cause unverified. Original timestamps preserved, performance/resource durations use monotonic clocks."
+}

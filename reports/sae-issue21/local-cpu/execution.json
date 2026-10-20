@@ -1,0 +1,23 @@
+{
+  "source_sha": "c9b58d228de38c2f04443f0495d55ab26797afed",
+  "algorithm_source_sha": "8ba99c4448e5494290fbfa0f8e12120115dcb58b",
+  "classification": "REAL_LOCAL_CPU_NO_PROVIDER",
+  "utc_start": "2026-10-20T18:01:19.386323+00:00",
+  "provider_calls": 0,
+  "numpy_warning": true,
+  "tests": {
+    "exit_code": 0,
+    "count": 4,
+    "elapsed_seconds": 5.365974426999999,
+    "timeout_seconds": 90
+  },
+  "driver": {
+    "exit_code": 0,
+    "elapsed_seconds": 4.146073297999999,
+    "timeout_seconds": 180,
+    "artifact_bytes": 3533,
+    "artifact_sha256": "3006480b3c96bda7af8b4ba1cb7ec09e09899ae872c190dc71020ed642a1ff79"
+  },
+  "status": "PASS",
+  "utc_end": "2026-10-20T18:01:28.898468+00:00"
+}

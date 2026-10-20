@@ -1,0 +1,47 @@
+{
+  "utc_start": "2026-10-20T18:02:51.309548+00:00",
+  "source_sha": "c9b58d228de38c2f04443f0495d55ab26797afed",
+  "attempt": 1,
+  "run_id": "yand21-t4-1-175309",
+  "classification": "REAL_PROVIDER_TRANSPORT_ONLY",
+  "device_requested": "T4",
+  "device_observed": "Tesla T4",
+  "status_polling_calls": 0,
+  "tool_blob_sha256": {
+    "colab_control.py": "1d564818b48c9d39d1209fb57d88d24c67316efeb1f2ce73172c56350cdc29af",
+    "environment_preflight.py": "1ab11ff4baedfa875a23307f9f6af961d1ac8481f62a91f2570d755674dec112",
+    "kernel_smoke.py": "63eedb51b7ac4710009df64d01cf9e33a6e6bdb498294766b215ee90d9490b03"
+  },
+  "limits": {
+    "task_seconds": 600,
+    "allocation_seconds": 420,
+    "cleanup_reserve_seconds": 60,
+    "kernel_timeout": 30,
+    "work_timeout": 240,
+    "new_timeout": 120,
+    "host_interrupt_after_seconds": 540,
+    "host_cleanup_grace_seconds": 60,
+    "host_kill_wait_seconds": 5,
+    "host_total_ceiling_seconds": 660
+  },
+  "provider_numerical_gpu": "PASS",
+  "tpu": "NOT_RUN",
+  "compilation": "NOT_RUN",
+  "controller_exit_code": 0,
+  "independent_final_readback": {
+    "status": "AUTHENTICATED_ZERO",
+    "utc_start": "2026-10-20T18:03:18.937024+00:00",
+    "exit_code": 0,
+    "assignments": 0,
+    "positive_entitlement": true,
+    "utc_end": "2026-10-20T18:03:20.577665+00:00",
+    "elapsed_seconds": 1.6406663839999993
+  },
+  "controller_cleanup_confirmed": true,
+  "new_commands": 1,
+  "artifact_verified": true,
+  "artifact_bytes": 7365,
+  "artifact_sha256": "bcfc6efcc45e29f99a6d3479471b997de0881dceb810b7ac9e64433eabc6bf20",
+  "utc_end": "2026-10-20T18:03:20.592676+00:00",
+  "elapsed_seconds": 30.775183866999996
+}
