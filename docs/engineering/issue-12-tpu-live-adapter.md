@@ -196,3 +196,25 @@ redirect, oversize and malformed JSON. They reject before any Colab transport,
 CLI import or output-directory creation. All GitHub/Colab responses in tests
 are offline fakes, including positive authorizations. No real run authorization
 has been granted or manufactured by these tests.
+
+### T2 final implementation evidence
+
+Tested implementation SHA: `5d2f2315f5cd1464f93507a0d429128d4949fb5c`.
+Environment unchanged: Windows 11 build 26200, Anaconda Python 3.14.6,
+torch 2.14.1+cpu, pytest 9.0.3; OMP_NUM_THREADS=1, MKL_NUM_THREADS=1.
+
+- `python -m pytest tests/test_tpu_live_adapter.py tests/test_tpu_safe_adapter.py tests/test_colab_tpu_guard.py -q`:
+  **201 passed in 65.64s**, exit 0 (103 live-adapter CPU/Mock tests +98 reused).
+- Approval expiry is rechecked after both GitHub responses; a dedicated test
+  advances a fake clock during reads and proves rejection before activation.
+- Default dry-run and `git diff --check` exit 0. No runtime/test changes follow
+  this SHA; the final documentation commit only records completed evidence.
+- `python -m pytest tests/ -q`: **1451 passed, 43 skipped, 1 warning in
+  138.32s**, exit 0, at that exact implementation SHA. Warning remains the
+  existing torch.jit.script / Python 3.14 FutureWarning in the MVSK oracle.
+- Sanitized local logs (ignored): benchmarks/results/issue-12/t2-scoped-final.txt
+  and t2-regression-final.txt. Only command summaries are published here.
+
+CPU_TESTS=PASS; MOCK_CLEANUP=PASS. REAL_SESSION_STOP, TPU_DEVICE and XLA_COMPILE
+remain NOT RUN; ACTUAL_CU=NOT MEASURED. Next is independent Architect T2 re-review
+of updated PR #13, not a merge or resource instruction from this Engineer.
