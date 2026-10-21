@@ -110,7 +110,7 @@ print(result.kkt_residual.item())
 
 ![Same-host CPU and T4 eager MVSK oracle benchmark](docs/assets/mvsk-oracle-benchmark.svg)
 
-A [recorded same-Colab-host scientific pilot](reports/sae-issue21/summary.md) timed the **public eager MVSK `value_grad` oracle** at `T=2048`, `n=256`, batch 256, float32. Two warmups and seven synchronized measurements were taken per scope:
+A [recorded same-Colab-host scientific pilot](reports/sae-issue21/summary.md) timed the **public eager MVSK `value_grad` oracle** at `T=2048`, `n=256`, batch 256, float32. Each scope used two warmups and seven timed repetitions; CUDA measurements were synchronized:
 
 | Scope | Median | CPU-relative ratio |
 |---|---:|---:|
@@ -144,7 +144,7 @@ These are research directions; the shipped solver targets MVSK portfolio optimiz
 | Experimental compiled fixed-PCG benchmark | Research-only |
 | Historical TPU/XLA harness | Retained research history, not an endorsed production backend |
 
-The recorded Colab T4 validation environment (PyTorch 2.11.0+cu130) passed **1,269 tests**. The newer [SAE scientific pilot](reports/sae-issue21/summary.md) separately reports a four-test CPU gate and bounded CPU/CUDA oracle and quadratic-solver checks; these are distinct experiments.
+The [historical validated Colab T4 run](https://github.com/JohnnyZPiggy/TorchYAND/blob/1ee2a100db61bc3be62ced9cc7923f261b512b35/README.md) (PyTorch 2.11.0+cu130) recorded **1,269 passing tests**. The newer [SAE scientific pilot](reports/sae-issue21/summary.md) separately reports a four-test CPU gate and bounded CPU/CUDA oracle and quadratic-solver checks; these are distinct experiments.
 
 Supported tensor dtypes are float32/float64; portfolios use `[..., n]` with shared four coefficients. Device/dtype must match the oracle. Solver termination statuses include `CONVERGED_KKT`, `STALLED`, `MAX_ITER`, `DIRECTION_FAILED`, `LINE_SEARCH_FAILED`, and `INVALID_STATE`. Float64 is recommended for stringent convergence work.
 
