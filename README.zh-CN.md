@@ -110,7 +110,7 @@ print(result.kkt_residual.item())
 
 ![同一主机 CPU 与 T4 eager MVSK oracle 测试](docs/assets/mvsk-oracle-benchmark.svg)
 
-[真实 Colab 科学实验](reports/sae-issue21/summary.md) 测量公共 **eager MVSK `value_grad` oracle**：`T=2048`、`n=256`、batch 256、float32。每组 2 次预热、7 次同步计时：
+[真实 Colab 科学实验](reports/sae-issue21/summary.md) 测量公共 **eager MVSK `value_grad` oracle**：`T=2048`、`n=256`、batch 256、float32。每组 2 次预热、7 次计时重复；CUDA 计时在测量前后执行同步：
 
 | 测量范围 | 中位数 | 相对 CPU |
 |---|---:|---:|
@@ -144,7 +144,7 @@ TorchYAND 的数值组件也可用于相关研究：
 | 编译固定 PCG 性能实验 | 实验路径 |
 | 历史 TPU/XLA 工具 | 保留研究记录，非正式生产后端 |
 
-历史 Colab T4 环境（PyTorch 2.11.0+cu130）记录 **1,269 项测试通过**。较新的 [SAE 科学实验](reports/sae-issue21/summary.md) 独立记录 4 项 CPU 测试，以及有界 CPU/CUDA oracle 与二次规划检查；两者不是同一轮测试。
+[历史 Colab T4 验证记录](https://github.com/JohnnyZPiggy/TorchYAND/blob/1ee2a100db61bc3be62ced9cc7923f261b512b35/README.md)（PyTorch 2.11.0+cu130）记录 **1,269 项测试通过**。较新的 [SAE 科学实验](reports/sae-issue21/summary.md) 独立记录 4 项 CPU 测试，以及有界 CPU/CUDA oracle 与二次规划检查；两者不是同一轮测试。
 
 支持 float32/float64；投资组合形状 `[..., n]`，共享四个目标系数，输入设备和精度与 oracle 一致。求解器状态包括 `CONVERGED_KKT`、`STALLED`、`MAX_ITER`、`DIRECTION_FAILED`、`LINE_SEARCH_FAILED`、`INVALID_STATE`。严格收敛研究建议使用 float64。
 
