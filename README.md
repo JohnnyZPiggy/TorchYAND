@@ -1,42 +1,58 @@
 # TorchYAND
 
-PyTorch implementation of the YAND-MVSK algorithm for higher-moment portfolio
-optimization. Version 0.1.0 provides a matrix-free numerical core and an eager
-solver for simplex-constrained portfolios.
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-## Features
+**Tensorized higher-moment portfolio optimization in native PyTorch.**
 
-- MVSK objective, gradient, Hessian-vector products, and third-order actions.
-- Matrix-free projected Hessian operators and batched PCG.
-- Stochastic and small-dimension exact logdet correction.
-- Affine-normal directions, active-set simplex constraints, exact quartic line
-  search, and KKT diagnostics.
-- CPU/CUDA, float32/float64, and leading batch dimensions on portfolio tensors.
+TorchYAND implements Yau's Affine-Normal Descent (YAND) for mean–variance–skewness–kurtosis (MVSK) portfolio optimization. It combines matrix-free derivative operators, simplex geometry, batched iterative linear algebra, polynomial line search, and KKT diagnostics in a CPU/CUDA-capable numerical library.
 
-See [the design specification](TorchYAND_MVSK_Design_Spec.md) for the mathematical
-definitions. Internal unchecked kernels are not the supported user API.
+![MIT](https://img.shields.io/badge/license-MIT-0f766e) ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab) ![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c) ![Status](https://img.shields.io/badge/release-0.1.0-0f766e)
 
-## Installation
+**Explore:** [Mathematical design](TorchYAND_MVSK_Design_Spec.md) · [Benchmarks](benchmarks/) · [Measured T4 pilot](reports/sae-issue21/summary.md) · [Evidence and figure provenance](docs/assets/README.md)
 
-From a local checkout:
+## Highlights
+
+- **Higher moments without higher-order moment tensors:** objective, gradient, Hessian-vector products (HVP), and third-order directional actions use centered-return projections.
+- **Matrix-free constrained optimization:** affine-normal directions, active-face simplex projections, projected Hessian operators, and batched PCG.
+- **Polynomial numerics:** cubic real-root solvers and feasible quartic line search.
+- **PyTorch-native execution:** float32/float64, CPU/CUDA, and leading portfolio batch dimensions.
+- **Inspectable convergence:** explicit solver statuses, KKT residuals, and reproducible benchmark entry points.
+
+## Mathematical model
+
+For a return matrix `R ∈ ℝ^(T×n)`, mean return `μ`, centered matrix `A = R − 1μᵀ`, portfolio `x`, and `z = Ax`, the implemented sample-moment objective is
+
+```text
+minimize  f(x) = -c1 * μᵀx + c2 * mean(z²) - c3 * mean(z³) + c4 * mean(z⁴)
+subject to x >= 0,  1ᵀx = 1;   c1,c2,c3,c4 >= 0
+```
+
+These are **central sample moments**, not standardized skewness or excess kurtosis. The public oracle accepts shared coefficients `[c1,c2,c3,c4]` and computes analytical derivatives without materializing covariance, co-skewness, co-kurtosis, or dense Hessian tensors. For example, with `w = 2c2 − 6c3 z + 12c4 z²`,
+
+```text
+∇f(x) = -c1 μ + Aᵀ(2c2 z − 3c3 z² + 4c4 z³)/T
+∇²f(x)v = Aᵀ(w ⊙ (Av))/T
+```
+
+See the [design specification](TorchYAND_MVSK_Design_Spec.md) for geometry, stochastic/exact logdet correction, and polynomial derivations.
+
+## Algorithm architecture
+
+![YAND numerical solver pipeline](docs/assets/yand-architecture.svg)
+
+The production v0.1 solver is **eager**, with adaptive PCG and active-set handling. The flow combines an MVSK oracle, affine-normal direction construction, feasible quartic search, and full-simplex KKT diagnostics. The diagram summarizes components rather than a literal call graph.
+
+![Matrix-free MVSK tensor operations](docs/assets/matrix-free-operations.svg)
+
+The matrix-free oracle reuses `Z = X @ A.T` across moment reductions and derivatives. Its projected-return representation supports leading batch dimensions while keeping the asset dimension fixed.
+
+## Installation and quick start
+
+Install from a checkout (Python >=3.10, PyTorch >=2.0 declared):
 
 ```bash
 pip install -e .
 ```
-
-For development and tests:
-
-```bash
-pip install -e ".[test]"
-python -m pytest tests/ -q
-```
-
-Python 3.10 or newer is declared in package metadata. The declared PyTorch
-minimum (`torch>=2.0`) still needs validation; it is not a claim that every
-allowed version has been tested. This project does not currently claim PyPI
-availability. Repository: [JohnnyZPiggy/TorchYAND](https://github.com/JohnnyZPiggy/TorchYAND).
-
-## Quick start
 
 ```python
 import torch
@@ -88,123 +104,67 @@ print(result.value.item())
 print(result.kkt_residual.item())
 ```
 
-`prepare_mvsk_data` returns `MVSKData`. The oracle and preprocessing API are
-available from `torchyand`; `YANDOptions`, `solve_yand`, `YANDMVSK`, `YANDResult`,
-and `SolverStatus` are available from `torchyand.solver`. `YANDMVSK` is a
-configuration wrapper around the same solver.
+`prepare_mvsk_data` and `MVSKOracle` are available from `torchyand`; `solve_yand`, `YANDOptions`, `YANDMVSK`, `YANDResult`, and `SolverStatus` are in `torchyand.solver`. `result.converged`, `result.status`, and `result.kkt_residual` describe termination. For nonconvex MVSK, KKT convergence means stationarity rather than global optimality.
 
-## Solver status
+## Performance: measured CPU and Tesla T4
 
-A returned result does **not** imply convergence. Inspect `result.converged`
-and `result.status`; `result.reason` provides additional diagnostics.
+![Same-host CPU and T4 eager MVSK oracle benchmark](docs/assets/mvsk-oracle-benchmark.svg)
 
-| Status | Meaning |
-| --- | --- |
-| `CONVERGED_KKT` | Full simplex KKT stopping condition is satisfied. |
-| `STALLED` | The progress or face-update policy terminated the solve. |
-| `MAX_ITER` | The outer iteration budget was reached. |
-| `DIRECTION_FAILED` | Direction construction failed, including its permitted fallback. |
-| `LINE_SEARCH_FAILED` | The feasible line search failed. |
-| `INVALID_STATE` | State validity or an orchestration invariant failed. |
+A [recorded same-Colab-host scientific pilot](reports/sae-issue21/summary.md) timed the **public eager MVSK `value_grad` oracle** at `T=2048`, `n=256`, batch 256, float32. Two warmups and seven synchronized measurements were taken per scope:
 
-Face stationarity alone is not full simplex convergence. Batched result fields
-retain the input batch dimensions, and individual items can stop differently.
-Convergence is not a guarantee of a global optimum for a nonconvex objective.
+| Scope | Median | CPU-relative ratio |
+|---|---:|---:|
+| CPU resident, 2 threads | 12.020 ms | 1.00× |
+| T4 resident compute | 1.102 ms | 10.91× |
+| T4 including transfers, oracle construction and result return | 2.206 ms | 5.45× |
 
-## Coefficients
+The CPU and T4 runs used the same Colab host and matching data. These are **oracle timings, not full-solver timings**; generation and centering were excluded. The [source report](reports/sae-issue21/summary.md) records parity checks, environment, timings, and exact source pins. Its scientific acceptance was pending at publication.
 
-`MVSKOracle(data, coefficients)` accepts a finite, nonnegative sequence or
-tensor of shape `[4]`, ordered **`[c1, c2, c3, c4]`**:
+A separate **experimental compiled fixed-PCG** repeated-solve benchmark reported approximately **22.9 s → 9.6 s (2.38×)** on T4, with ~11 minutes of cold compilation and ~51-solve estimated break-even. That path does **not** replace the default eager adaptive solver; its provenance currently appears in the [historical README at the pinned baseline](https://github.com/JohnnyZPiggy/TorchYAND/blob/1ee2a100db61bc3be62ced9cc7923f261b512b35/README.md) and the [benchmark entry point](benchmarks/bench_yand_compiled_pcg.py).
 
-```text
-mu = mean(returns, dim=0)
-A = returns - mu
-z = A @ x
-f(x) = -c1 * dot(mu, x)
-       + c2 * mean(z**2)
-       - c3 * mean(z**3)
-       + c4 * mean(z**4)
+## Research applications
+
+TorchYAND offers reusable numerical patterns beyond a single portfolio model:
+
+| Direction | Relevant building blocks |
+|---|---|
+| Higher-moment asset allocation | Mean, variance, third and fourth central moments under simplex constraints |
+| Batched constrained optimization | Active-set masks, projected operators, KKT monitoring |
+| Differentiable-model analysis | Analytical gradient, HVP and third-order actions; separate training integration required |
+| GPU numerical research | Tensorized polynomial solvers, matrix-free PCG, and controlled compile experiments |
+
+These are research directions; the shipped solver targets MVSK portfolio optimization.
+
+## Solver, validation and scope
+
+| Component | Status |
+|---|---|
+| MVSK oracle, derivatives, geometry, polynomial solvers | Implemented |
+| Eager YAND solver with adaptive PCG, simplex constraints and KKT statuses | Implemented |
+| Experimental compiled fixed-PCG benchmark | Research-only |
+| Historical TPU/XLA harness | Retained research history, not an endorsed production backend |
+
+The recorded Colab T4 validation environment (PyTorch 2.11.0+cu130) passed **1,269 tests**. The newer [SAE scientific pilot](reports/sae-issue21/summary.md) separately reports a four-test CPU gate and bounded CPU/CUDA oracle and quadratic-solver checks; these are distinct experiments.
+
+Supported tensor dtypes are float32/float64; portfolios use `[..., n]` with shared four coefficients. Device/dtype must match the oracle. Solver termination statuses include `CONVERGED_KKT`, `STALLED`, `MAX_ITER`, `DIRECTION_FAILED`, `LINE_SEARCH_FAILED`, and `INVALID_STATE`. Float64 is recommended for stringent convergence work.
+
+```bash
+pip install -e ".[test]"
+python -m pytest tests/ -q
 ```
 
-These are sample central moments, not standardized skewness or kurtosis.
-Coefficients are shared across a portfolio batch; batched coefficient arrays
-are not supported in v0.1.
+For performance reproduction, inspect [benchmark scripts](benchmarks/) and their measurement scopes. Compiled experiments are optional and require an appropriate compiler environment.
 
-## Precision and devices
-
-Float32 and float64 are supported on CPU and CUDA. Portfolio and direction
-tensors must match the oracle data's dtype/device and have shape `[..., n]`.
-Only leading batch dimensions broadcast; the asset dimension must agree.
-For CUDA, move returns to CUDA before preprocessing and create `x0` on the same
-device. Float64 is recommended for strict convergence studies.
-
-Preprocessing centers in float64 by default and preserves the input dtype in
-its output. Numerical trajectories can differ across devices and precisions;
-bitwise CPU/CUDA reproducibility is not promised. Do not mutate oracle data,
-coefficients, or cached tensors in place during use.
-
-## Performance
-
-Eager end-to-end GPU execution can be slower than CPU for small single solves
-because the orchestration is launch/synchronization heavy. Compiled fixed PCG
-has achieved strong steady-state kernel speedups in separate experiments.
-
-In one validated representative repeated fixed-shape Tesla T4 experiment,
-end-to-end solve time decreased from about **22.9 s to 9.6 s (~2.38x)**. Cold
-compilation cost about **11 minutes**, with break-even around **51 repeated
-solves**. These measurements describe that experiment, not a general speed
-guarantee.
-
-Compiled PCG is an **experimental benchmark path**, not the default solver
-behavior. The eager solver and its default adaptive PCG remain unchanged.
-
-## Validation
-
-**1269 tests passed on the validated Colab environment: PyTorch 2.11.0+cu130,
-Tesla T4.** This does not validate all PyTorch versions. CPU GitHub Actions
-targets Python 3.10 and 3.13; tests do not require CUDA or native compile code
-generation. Compatibility claims depend on those checks actually passing.
-
-## Benchmarks
-
-Run scripts from the checkout root. Generated benchmark results are ignored
-and should not be committed.
-
-| Script in `benchmarks/` | Purpose |
-| --- | --- |
-| `bench_cubic.py` | Cubic solver latency and throughput, with optional compile modes. |
-| `bench_quartic.py` | Quartic interval minimizer baseline and compile experiments. |
-| `bench_mvsk.py` | Eager oracle and cache costs. |
-| `bench_yand_solver.py` | Full eager solver pipeline. |
-| `profile_yand_solver.py` | CPU/CUDA solver operation profiles and optional traces. |
-| `bench_mvsk_compile.py` | Optional compiled MVSK tensor kernels. |
-| `bench_pcg_compile.py` | Adaptive/fixed eager versus compiled fixed PCG core. |
-| `bench_pcg_compile_reuse.py` | Graph reuse across changing numerical states and masks. |
-| `bench_yand_compiled_pcg.py` | Optional scoped compiled-PCG end-to-end experiment. |
-
-Compile experiments require an appropriate native compiler/toolchain and
-report failures without silent fallback. They are not run in CI.
-
-## Project structure
+## Project layout
 
 ```text
 torchyand/
-  data/          # Return preprocessing
-  oracle/        # MVSK objective and derivatives
-  polynomial/    # Real roots and quartic minimization
-  geometry/      # Projectors and affine-normal direction
-  operators/     # Projected Hessian
-  linalg/        # Batched PCG
-  logdet/        # Exact/stochastic corrections
-  constraints/   # Feasible step cap and active sets
-  diagnostics/   # KKT diagnostics
-  line_models/   # MVSK line coefficients
-  line_search/   # Exact feasible line search
-  solver/        # State machine and solver driver
-tests/           # Independent references and correctness tests
-benchmarks/      # Performance experiments
+  data/         oracle/       geometry/       operators/
+  linalg/       logdet/       polynomial/     constraints/
+  line_models/  line_search/  diagnostics/    solver/
+tests/          benchmarks/   experiments/    reports/
 ```
 
 ## License
 
-MIT; see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Research reports and historical experimental records are preserved separately from the public API.
